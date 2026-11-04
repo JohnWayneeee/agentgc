@@ -1,4 +1,5 @@
 mod clean;
+mod compose;
 mod deps;
 mod lock;
 mod out;

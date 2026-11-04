@@ -12,6 +12,8 @@ pub struct Config {
     pub db: DbCfg,
     pub env: EnvCfg,
     pub setup: SetupCfg,
+    pub compose: Option<ComposeCfg>,
+    pub routes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -82,6 +84,16 @@ pub struct SetupCfg {
     pub commands: Vec<String>,
 }
 
+/// `[compose]`: render one compose file per task from a template.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ComposeCfg {
+    /// Path relative to the repo root.
+    pub template: String,
+    /// Path relative to the worktree.
+    pub output: String,
+}
+
 pub fn parse_config(text: &str) -> Result<Config, String> {
     let c: Config = toml::from_str(text).map_err(|e| format!("bad task config: {e}"))?;
     validate(&c)?;
@@ -121,6 +133,20 @@ fn validate(c: &Config) -> Result<(), String> {
     }
     if c.ports.names.len() > (c.ports.range[1] - c.ports.range[0]) as usize + 1 {
         return Err("ports.range is smaller than the number of ports.names".into());
+    }
+    if let Some(cp) = &c.compose {
+        if !safe_rel(&cp.template) {
+            return Err(format!("compose.template must be a relative path without '..': {:?}", cp.template));
+        }
+        if !safe_rel(&cp.output) {
+            return Err(format!("compose.output must be a relative path without '..': {:?}", cp.output));
+        }
+    }
+    for (r, port) in &c.routes {
+        sanitize_name(r).map_err(|e| format!("routes {r:?}: {e}"))?;
+        if !c.ports.names.contains(port) {
+            return Err(format!("routes.{r} points to port {port:?}, which is not in ports.names"));
+        }
     }
     for k in c.env.vars.keys().chain(c.env.dynamic.keys()) {
         if !valid_env_key(k) {

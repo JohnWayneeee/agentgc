@@ -1,3 +1,4 @@
+use crate::compose;
 use crate::out::outln;
 use crate::task_config::{self as tc, Config};
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,12 @@ pub struct Entry {
     /// Old entries have no state and count as ready.
     #[serde(default = "ready_state")]
     pub state: String,
+    /// Rendered compose file, relative to the worktree. Empty when none.
+    #[serde(default)]
+    pub compose_file: String,
+    /// Route name -> `<name>.<task>.localhost:<port>`.
+    #[serde(default)]
+    pub routes: BTreeMap<String, String>,
 }
 
 fn ready_state() -> String {
@@ -62,6 +69,16 @@ pub struct Plan {
     pub create: Option<String>,
     pub setup: Vec<String>,
     pub drop_tpl: String,
+    pub compose: Option<ComposePlan>,
+    /// Route name and `<name>.<task>.localhost:<port>`.
+    pub routes: Vec<(String, String)>,
+}
+
+/// Compose file already rendered in memory; written only by `execute`.
+#[derive(Debug)]
+pub struct ComposePlan {
+    pub output: String,
+    pub rendered: String,
 }
 
 fn now_secs() -> u64 {
@@ -172,6 +189,42 @@ pub fn build_plan(
     for (k, v) in &cfg.env.dynamic {
         tc::put(&mut env, k, tc::fill(v, &vars)?);
     }
+    let mut routes: Vec<(String, String)> = Vec::new();
+    for (r, port_name) in &cfg.routes {
+        let port = ports
+            .iter()
+            .find(|(n, _)| n == port_name)
+            .map(|(_, p)| *p)
+            .ok_or_else(|| format!("routes.{r} points to unknown port {port_name:?}"))?;
+        let host = compose::route_host(r, &name, port);
+        tc::put(&mut env, &compose::route_env_key(r), format!("http://{host}"));
+        routes.push((r.clone(), host));
+    }
+    let wt_path = root.join(&cfg.worktree.dir).join(&name);
+    let compose_plan = match &cfg.compose {
+        None => None,
+        Some(cp) => {
+            tc::put(&mut env, "COMPOSE_PROJECT_NAME", compose::project_name(&name));
+            let tpl_path = root.join(&cp.template);
+            if !tpl_path.is_file() {
+                return Err(format!("compose template not found: {}", tpl_path.display()));
+            }
+            let tpl = fs::read_to_string(&tpl_path)
+                .map_err(|e| format!("cannot read compose template {}: {e}", tpl_path.display()))?;
+            let mut cv: BTreeMap<String, String> = BTreeMap::new();
+            cv.insert("task".into(), name.clone());
+            cv.insert("db".into(), db.clone());
+            cv.insert("worktree".into(), wt_path.to_string_lossy().into_owned());
+            for (n, p) in &ports {
+                cv.insert(format!("port.{n}"), p.to_string());
+            }
+            for (k, v) in &env {
+                cv.insert(format!("env.{k}"), v.clone());
+            }
+            let rendered = compose::render(&tpl, &cv)?;
+            Some(ComposePlan { output: cp.output.clone(), rendered })
+        }
+    };
     tc::render_env(&env)?; // checks line breaks early
 
     let create = if cfg.db.create.trim().is_empty() {
@@ -186,7 +239,7 @@ pub fn build_plan(
     let copy = cfg.copy.files.iter().map(|f| (f.clone(), root.join(f).is_file())).collect();
 
     Ok(Plan {
-        wt_path: root.join(&cfg.worktree.dir).join(&name),
+        wt_path,
         wt_dir: cfg.worktree.dir.clone(),
         name,
         root: root.to_path_buf(),
@@ -199,6 +252,8 @@ pub fn build_plan(
         create,
         setup,
         drop_tpl: cfg.db.drop.clone(),
+        compose: compose_plan,
+        routes,
     })
 }
 
@@ -244,6 +299,16 @@ fn print_plan(p: &Plan, run_setup: bool, config_note: &str) {
     outln!("  env file: {}", p.wt_path.join(".agentgc").join("task.env").display());
     for (k, v) in &p.env {
         outln!("    {k}={}", tc::mask_value(k, v));
+    }
+    if let Some(c) = &p.compose {
+        outln!(
+            "  compose:  {}  (rendered from the template; project {})",
+            p.wt_path.join(&c.output).display(),
+            compose::project_name(&p.name)
+        );
+    }
+    for (r, h) in &p.routes {
+        outln!("  route:    {r} -> {h}");
     }
     outln!(
         "  registry: {}",
@@ -359,6 +424,8 @@ pub fn execute(p: &Plan, run_setup: bool) -> Result<(), String> {
         setup_done: false,
         drop: p.drop_tpl.clone(),
         state: "creating".into(),
+        compose_file: p.compose.as_ref().map(|c| c.output.clone()).unwrap_or_default(),
+        routes: p.routes.iter().cloned().collect(),
     };
     let reg = tasks_dir(&p.root).join(format!("{}.json", p.name));
     write_new(&reg, &serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?)?;
@@ -368,6 +435,9 @@ pub fn execute(p: &Plan, run_setup: bool) -> Result<(), String> {
     entry.state = "ready".into();
     write_replace(&reg, &serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?)
         .map_err(|e| format!("{e}; {hint}"))?;
+    for (r, h) in &p.routes {
+        outln!("route {r}: {h}");
+    }
     outln!("task {} is ready", p.name);
     Ok(())
 }
@@ -399,6 +469,12 @@ fn build(p: &Plan, run_setup: bool, entry: &mut Entry) -> Result<(), String> {
         }
         fs::copy(p.root.join(f), &dest).map_err(|e| format!("cannot copy {f}: {e}"))?;
         outln!("  copied {f}");
+    }
+
+    if let Some(c) = &p.compose {
+        let out_path = p.wt_path.join(&c.output);
+        write_new(&out_path, &c.rendered)?;
+        outln!("wrote {} (agentgc never starts containers)", out_path.display());
     }
 
     let env_path = p.wt_path.join(".agentgc").join("task.env");
@@ -506,15 +582,17 @@ pub fn cmd_list(repo: Option<PathBuf>, json: bool) -> Result<(), String> {
             status.insert(0, "incomplete".into());
         }
         let ports: Vec<String> = e.ports.iter().map(|(n, p)| format!("{n}={p}")).collect();
+        let routes: Vec<String> = e.routes.iter().map(|(n, h)| format!("{n}={h}")).collect();
         outln!(
-            "{}  [{}]  {}d\n    path:   {}\n    branch: {}\n    ports:  {}\n    db:     {}",
+            "{}  [{}]  {}d\n    path:   {}\n    branch: {}\n    ports:  {}\n    db:     {}\n    routes: {}",
             e.name,
             status.join(","),
             r.age_days,
             e.path,
             e.branch,
             if ports.is_empty() { "-".into() } else { ports.join(" ") },
-            e.db
+            e.db,
+            if routes.is_empty() { "-".into() } else { routes.join(" ") }
         );
     }
     outln!("{} tasks. Nothing was changed.", rows.len());
@@ -594,6 +672,39 @@ mod tests {
         assert!(build_plan(&c, "ok", &root, &HashSet::new(), &|_| true).is_err());
         let c = cfg("[env]\nA=\"{nope}\"");
         assert!(build_plan(&c, "ok", &root, &HashSet::new(), &|_| true).is_err());
+    }
+
+    #[test]
+    fn old_registry_entry_loads() {
+        let old = r#"{"name":"a","path":"/x","branch":"a","base":"main","ports":{},"db":"d","created_at":1,"setup_done":false,"drop":""}"#;
+        let e: Entry = serde_json::from_str(old).unwrap();
+        assert_eq!(e.compose_file, "");
+        assert!(e.routes.is_empty());
+        assert_eq!(e.state, "ready");
+    }
+
+    #[test]
+    fn plan_renders_compose_and_routes() {
+        let base = tmp("compose-plan");
+        fs::write(base.join("t.tpl"), "n: {{task}}\nw: {{port.web}}\nd: {{db}}\ne: {{env.COMPOSE_PROJECT_NAME}}\n").unwrap();
+        let c = cfg("[ports]\nnames=[\"web\"]\n[compose]\ntemplate=\"t.tpl\"\noutput=\"dc.yml\"\n[routes]\nweb=\"web\"\n");
+        let p = build_plan(&c, "demo", &base, &HashSet::new(), &|_| true).unwrap();
+        let cp = p.compose.as_ref().unwrap();
+        assert!(cp.rendered.starts_with("n: demo\nw: 3100\nd: "));
+        assert!(cp.rendered.contains("e: agentgc-demo\n"));
+        assert_eq!(p.routes, vec![("web".to_string(), "web.demo.localhost:3100".to_string())]);
+        let env = tc::render_env(&p.env).unwrap();
+        assert!(env.contains("COMPOSE_PROJECT_NAME=agentgc-demo\n"));
+        assert!(env.contains("AGENTGC_ROUTE_WEB=http://web.demo.localhost:3100\n"));
+        // unknown placeholder: error names it
+        fs::write(base.join("t.tpl"), "{{port.nope}}").unwrap();
+        let e = build_plan(&c, "demo", &base, &HashSet::new(), &|_| true).unwrap_err();
+        assert!(e.contains("{{port.nope}}"), "{e}");
+        // missing template
+        fs::remove_file(base.join("t.tpl")).unwrap();
+        let e = build_plan(&c, "demo", &base, &HashSet::new(), &|_| true).unwrap_err();
+        assert!(e.contains("template not found"), "{e}");
+        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

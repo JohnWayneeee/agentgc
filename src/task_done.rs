@@ -122,7 +122,8 @@ fn stderr_of(o: &std::process::Output) -> String {
 }
 
 /// Changed files, ignoring `.agentgc/`.
-fn dirty_files(wt: &Path) -> Result<Vec<String>, String> {
+/// An untracked entry equal to `ignore` (the rendered compose file) is skipped too.
+fn dirty_files(wt: &Path, ignore: Option<&str>) -> Result<Vec<String>, String> {
     let o = task::git(wt, &["status", "--porcelain"])?;
     if !o.status.success() {
         return Err(stderr_of(&o));
@@ -136,6 +137,11 @@ fn dirty_files(wt: &Path) -> Result<Vec<String>, String> {
         let last = path.rsplit(" -> ").next().unwrap_or(path).trim_matches('"');
         if last == ".agentgc" || last.starts_with(".agentgc/") {
             continue;
+        }
+        if let Some(ig) = ignore {
+            if l.starts_with("??") && last.replace('\\', "/") == ig {
+                continue;
+            }
         }
         v.push(path.to_string());
     }
@@ -191,6 +197,10 @@ fn tag(ok: bool) -> &'static str {
     }
 }
 
+fn compose_hint(name: &str) -> String {
+    format!("docker compose -p {} down -v", crate::compose::project_name(name))
+}
+
 pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
     let name = tc::sanitize_name(&a.name)?;
     let root = task::find_repo_root(a.repo.as_deref().unwrap_or(Path::new(".")))?;
@@ -220,6 +230,15 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         }
     }
 
+    // Rendered compose file recorded by `new`. Only a safe relative path counts.
+    let compose_rel: Option<String> = if entry.compose_file.is_empty() {
+        None
+    } else if tc::safe_rel(&entry.compose_file) {
+        Some(entry.compose_file.replace('\\', "/").trim_start_matches("./").to_string())
+    } else {
+        return Err(format!("registry compose_file {:?} is not a safe relative path; refusing", entry.compose_file));
+    };
+
     let size = if t.exists { scan::dir_size(&t.path) } else { 0 };
     let branch_exists = task::branch_exists(&root, &entry.branch);
     outln!("Finish task {name:?} (state: {}, {note})", entry.state);
@@ -247,7 +266,7 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
     let mut blockers: Vec<(String, String)> = Vec::new();
     let mut found: Vec<Found> = Vec::new();
     if t.exists {
-        match dirty_files(&t.path) {
+        match dirty_files(&t.path, compose_rel.as_deref()) {
             Ok(f) if f.is_empty() => outln!("  {} no uncommitted work", tag(true)),
             Ok(f) => {
                 let mut shown: Vec<String> = f.iter().take(SHOW_FILES).cloned().collect();
@@ -336,6 +355,10 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         None => outln!("  b. no drop command"),
     }
     outln!("  c. delete {}/.agentgc/task.env, then .agentgc if empty", plain(&t.path));
+    if let Some(c) = &compose_rel {
+        outln!("     delete the rendered compose file {c} (one file, only if untracked and inside the worktree)");
+        outln!("     hint (never run by agentgc): {}", compose_hint(&name));
+    }
     outln!(
         "  d. {}",
         if t.exists {
@@ -374,7 +397,7 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
 
     out::set_critical(true);
     let mut done: Vec<String> = Vec::new();
-    let res = execute(a, &root, &entry, &t, &found, drop_cmd.as_deref(), branch_exists, &reg, &mut done);
+    let res = execute(a, &root, &entry, &t, &found, drop_cmd.as_deref(), branch_exists, &reg, compose_rel.as_deref(), &mut done);
     if let Err(e) = &res {
         outln!("Stopped at the first failure. Already done:");
         if done.is_empty() {
@@ -385,7 +408,42 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         }
         return Err(e.clone());
     }
+    if compose_rel.is_some() {
+        outln!("Containers are not stopped by agentgc. If you started them, run: {}", compose_hint(&name));
+    }
     outln!("Task {name:?} finished; freed about {}", scan::human(size));
+    Ok(())
+}
+
+/// Remove the one rendered compose file. Never a folder, never a symlink, never a tracked file,
+/// never a path that resolves outside the worktree.
+fn remove_compose_file(wt: &Path, rel: &str, done: &mut Vec<String>) -> Result<(), String> {
+    let p = wt.join(rel);
+    match fs::symlink_metadata(&p) {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => {
+            outln!("  kept {}: not a plain file", plain(&p));
+            return Ok(());
+        }
+        Err(_) => return Ok(()),
+    }
+    let inside_wt = match (fs::canonicalize(&p), fs::canonicalize(wt)) {
+        (Ok(c), Ok(w)) => c.starts_with(&w),
+        _ => false,
+    };
+    if !inside_wt {
+        outln!("  kept {}: not inside the worktree", plain(&p));
+        return Ok(());
+    }
+    let tracked = task::git(wt, &["ls-files", "--error-unmatch", "--", rel])
+        .map(|o| o.status.success())
+        .unwrap_or(true);
+    if tracked {
+        outln!("  kept {}: tracked by git", plain(&p));
+        return Ok(());
+    }
+    fs::remove_file(&p).map_err(|e| format!("cannot delete {}: {e}", p.display()))?;
+    done.push(format!("deleted {}", plain(&p)));
     Ok(())
 }
 
@@ -399,6 +457,7 @@ fn execute(
     drop_cmd: Option<&str>,
     branch_exists: bool,
     reg: &Path,
+    compose_rel: Option<&str>,
     done: &mut Vec<String>,
 ) -> Result<(), String> {
     // a. processes
@@ -438,6 +497,9 @@ fn execute(
 
     // c. own files only. No recursive delete anywhere.
     if t.exists {
+        if let Some(rel) = compose_rel {
+            remove_compose_file(&t.path, rel, done)?;
+        }
         let ad = t.path.join(".agentgc");
         if fs::symlink_metadata(&ad).map_or(false, |m| m.is_dir()) {
             let env = ad.join("task.env");

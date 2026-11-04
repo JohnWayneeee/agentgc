@@ -192,6 +192,48 @@ in URLs and values of keys that contain SECRET, TOKEN, PASSWORD or KEY. A hint a
 `dirty` (`git status --porcelain` prints something), `unknown` (git failed) or `incomplete` (state `creating`).
 `task new` and `task list` never delete anything. Printing never panics on a closed stdout (`| head`).
 
+### Compose file per task (`[compose]`, `[routes]`)
+
+Parallel tasks must not clash on ports, container names, volumes or hostnames. `task new` can render one
+docker-compose file per task from a template. Both sections are optional.
+
+```toml
+[ports]
+names = ["web", "api"]
+[compose]
+template = "docker-compose.task.yml.tpl"   # path relative to the repo root; must exist
+output = "docker-compose.task.yml"         # path relative to the worktree; no '..'
+[routes]                                   # route name -> port name from [ports]
+web = "web"                                # http://web.<task>.localhost:<port>
+```
+
+Template (`docker-compose.task.yml.tpl`):
+
+```yaml
+services:
+  web:
+    container_name: web-{{task}}
+    ports: ["{{port.web}}:3000"]
+    environment:
+      DATABASE_URL: postgres://localhost/{{db}}
+```
+
+Placeholders (plain text replace): `{{task}}`, `{{port.NAME}}`, `{{db}}`, `{{env.NAME}}` (any key of the task env, for
+example `{{env.PREFIX}}`), `{{worktree}}`. An unknown placeholder is an error that names it; nothing is written then.
+
+- `task new` renders the file after ports and db are allocated and writes it with `create_new`. An existing file is
+  never overwritten: `new` stops with an error and the file stays.
+- It prints the routes (`web.<task>.localhost:<port>`) and writes them to `<worktree>/.agentgc/task.env` as
+  `AGENTGC_ROUTE_<NAME>=http://...`. It also writes `COMPOSE_PROJECT_NAME=agentgc-<task>`, so `docker compose` keeps
+  containers and volumes of each task apart.
+- agentgc never starts or stops containers and never runs docker.
+- The registry entry records `compose_file` and `routes` (old entries without them still load). `task list` shows the routes.
+- `task done --yes` removes only that one recorded file: it must be a plain file, untracked, and inside the
+  worktree (`remove_file`, never a recursive delete). It prints the hint `docker compose -p agentgc-<task> down -v`
+  and never runs it. The rendered file does not count as uncommitted work.
+- Checks at load time: `output` and `template` are relative paths without `..`; the template file exists; every route
+  points to a name in `ports.names`.
+
 ### `task done`
 
 ```
