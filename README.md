@@ -337,6 +337,14 @@ Steps with `--yes` (the first failure stops the run and the already done steps a
 - f. Deletes the registry file.
 - g. Prints "freed about X" (size measured before step a).
 
+**Resume.** If a run stopped half way (for example a shell held the folder, so git removed the worktree but an empty
+`<repo>/worktrees/NAME` stayed), run `agentgc task done NAME --yes` again. Resume state: the registry entry exists, git
+no longer lists the worktree, and the folder is missing or has no entries at all (hidden ones too). Then only the rest
+runs: `remove_dir` on the empty folder, `git branch -d` (`-D` with `--force`, same blockers), delete the registry file.
+Dry run shows this plan. A non-empty folder without `.git`, or a folder git still lists, is still refused. A failed
+step prints which step failed and `agentgc task done NAME --yes` as the next command; a folder that cannot be removed
+may be held by a program (shell cwd, editor): close it first.
+
 Never touched: anything outside the task folder, the main checkout, other tasks, remote branches. No recursive delete
 (`remove_dir_all`) exists in the command. If stdout closes during `--yes`, output goes silent but the steps still finish.
 

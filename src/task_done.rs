@@ -122,6 +122,25 @@ fn plain(p: &Path) -> String {
     }
 }
 
+/// True when `git worktree list --porcelain` lists `path`.
+fn worktree_listed(root: &Path, path: &Path) -> Result<bool, String> {
+    let o = task::git(root, &["worktree", "list", "--porcelain"])?;
+    if !o.status.success() {
+        return Err(format!("cannot list git worktrees: {}", stderr_of(&o)));
+    }
+    let want = ps::norm(Path::new(&plain(path)));
+    Ok(String::from_utf8_lossy(&o.stdout)
+        .lines()
+        .filter_map(|l| l.strip_prefix("worktree "))
+        .any(|p| ps::norm(Path::new(p.trim())) == want))
+}
+
+/// True when the folder has no entries at all, hidden ones included.
+fn dir_is_empty(path: &Path) -> Result<bool, String> {
+    let mut rd = fs::read_dir(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    Ok(rd.next().is_none())
+}
+
 fn stderr_of(o: &std::process::Output) -> String {
     String::from_utf8_lossy(&o.stderr).trim().to_string()
 }
@@ -215,15 +234,25 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
     if tc::bad_ref(&entry.base) {
         return Err(format!("registry base {:?} is not allowed; refusing", entry.base));
     }
-    let t = guard(&root, &cfg.worktree.dir, &name, &entry.path)?;
-    if t.exists {
-        let g = t.path.join(".git");
-        if !g.is_file() {
-            return Err(format!(
-                "{} has no `.git` file (not a linked git worktree); refusing to touch it",
+    let mut t = guard(&root, &cfg.worktree.dir, &name, &entry.path)?;
+    // Resume state: git already dropped the worktree, only an empty folder is left.
+    let mut resume_dir = false;
+    if t.exists && !t.path.join(".git").is_file() {
+        let refuse = |why: &str| {
+            format!(
+                "{} has no `.git` file (not a linked git worktree){why}; refusing to touch it",
                 t.path.display()
-            ));
+            )
+        };
+        if worktree_listed(&root, &t.path)? {
+            return Err(refuse(", and git still lists it (run `git worktree prune` if the folder is stale)"));
         }
+        if !dir_is_empty(&t.path)? {
+            return Err(refuse(", and the folder is not empty"));
+        }
+        resume_dir = true;
+        // Downstream checks must not run git inside this folder (it would see the parent repo).
+        t.exists = false;
     }
 
     // Rendered compose file recorded by `new`. Only a safe relative path counts.
@@ -247,11 +276,21 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
     let size = if t.exists { scan::dir_size(&t.path) } else { 0 };
     let branch_exists = task::branch_exists(&root, &entry.branch);
     outln!("Finish task {name:?} (state: {}, {note})", entry.state);
+    if resume_dir {
+        outln!("RESUME: a partly finished task. Git no longer lists the worktree and its folder is empty.");
+        outln!("        Only the remaining steps run: remove the empty folder, delete the branch, delete the registry file.");
+    }
     outln!("  repo:     {}", root.display());
     outln!(
         "  worktree: {}  ({})",
         plain(&t.path),
-        if t.exists { "exists" } else { "folder already gone" }
+        if t.exists {
+            "exists"
+        } else if resume_dir {
+            "empty folder left over"
+        } else {
+            "folder already gone"
+        }
     );
     outln!(
         "  branch:   {}  (base {}; {})",
@@ -388,6 +427,8 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         "  d. {}",
         if t.exists {
             format!("git worktree remove{} {}", if a.force { " --force" } else { "" }, plain(&t.path))
+        } else if resume_dir {
+            format!("git already removed the worktree; remove the empty folder {} (remove_dir)", plain(&t.path))
         } else {
             "worktree folder is gone: nothing to remove".into()
         }
@@ -428,7 +469,7 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
 
     out::set_critical(true);
     let mut done: Vec<String> = Vec::new();
-    let res = execute(a, &root, &entry, &t, &found, drop_cmd.as_deref(), branch_exists, &reg, compose_rel.as_deref(), &generated, &mut done);
+    let res = execute(a, &root, &entry, &t, resume_dir, &found, drop_cmd.as_deref(), branch_exists, &reg, compose_rel.as_deref(), &generated, &mut done);
     if let Err(e) = &res {
         outln!("Stopped at the first failure. Already done:");
         if done.is_empty() {
@@ -437,6 +478,10 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         for d in &done {
             outln!("  - {d}");
         }
+        outln!(
+            "To resume, run: agentgc task done {name} --yes{}",
+            if a.force { " --force" } else { "" }
+        );
         return Err(e.clone());
     }
     if compose_rel.is_some() {
@@ -484,6 +529,7 @@ fn execute(
     root: &Path,
     entry: &Entry,
     t: &Target,
+    resume_dir: bool,
     found: &[Found],
     drop_cmd: Option<&str>,
     branch_exists: bool,
@@ -570,12 +616,24 @@ fn execute(
         args.push(&wt);
         let o = task::git(root, &args)?;
         if !o.status.success() {
-            return Err(format!("git worktree remove refused: {}", stderr_of(&o)));
+            return Err(format!(
+                "step d (git worktree remove) failed: {}. A program may hold the folder (a shell with its cwd inside, an editor): close it first",
+                stderr_of(&o)
+            ));
         }
         done.push(format!("git worktree remove {wt}"));
         if t.path.exists() {
             outln!("  note: git left the folder {wt}; agentgc does not delete it by other means");
         }
+    } else if resume_dir {
+        // Only an empty folder is left. `remove_dir` fails on a non-empty folder; never recursive.
+        fs::remove_dir(&t.path).map_err(|e| {
+            format!(
+                "step d (remove the empty folder {}) failed: {e}. A program may hold the folder (a shell with its cwd inside, an editor): close it first",
+                plain(&t.path)
+            )
+        })?;
+        done.push(format!("removed the empty folder {}", plain(&t.path)));
     } else {
         outln!("  worktree folder is already gone; run `git worktree prune` if git still lists it");
     }
@@ -592,7 +650,7 @@ fn execute(
     }
 
     // f. registry
-    fs::remove_file(reg).map_err(|e| format!("cannot delete {}: {e}", reg.display()))?;
+    fs::remove_file(reg).map_err(|e| format!("step f (delete the registry file) failed: cannot delete {}: {e}", reg.display()))?;
     done.push(format!("deleted {}", reg.display()));
     Ok(())
 }

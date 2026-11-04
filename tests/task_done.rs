@@ -269,3 +269,64 @@ fn bad_base_and_branch_from_config_are_rejected() {
     }
     let _ = fs::remove_dir_all(&base);
 }
+
+/// Stuck state: git removed the worktree, an empty folder, the branch and the registry file stay.
+fn stuck_task(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
+    let base = tmp(tag);
+    let repo = make_repo(&base, "");
+    new_task(&repo, "one");
+    let wt = repo.join("worktrees").join("one");
+    fs::remove_dir_all(wt.join(".agentgc")).unwrap();
+    git(&repo, &["worktree", "remove", wt.to_str().unwrap()]);
+    fs::create_dir_all(&wt).unwrap();
+    (base, repo, wt)
+}
+
+#[test]
+fn resume_finishes_after_partial_failure() {
+    need_git!();
+    let (base, repo, wt) = stuck_task("resume");
+    assert!(!git(&repo, &["worktree", "list", "--porcelain"]).contains("worktrees/one"));
+    let (ok, t) = agentgc(&repo, &["done", "one"]);
+    assert!(ok && t.contains("RESUME") && t.contains("Dry run: nothing changed"), "{t}");
+    assert!(wt.is_dir() && reg(&repo, "one").exists());
+    assert!(git_try(&repo, &["rev-parse", "--verify", "refs/heads/one"]));
+    let (ok, t) = agentgc(&repo, &["done", "one", "--yes"]);
+    assert!(ok, "{t}");
+    assert!(!wt.exists() && !reg(&repo, "one").exists());
+    assert!(!git_try(&repo, &["rev-parse", "--verify", "refs/heads/one"]));
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "");
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn resume_refuses_non_empty_folder_without_git_file() {
+    need_git!();
+    let (base, repo, wt) = stuck_task("resume-full");
+    fs::write(wt.join(".hidden"), "x").unwrap();
+    for args in [vec!["done", "one"], vec!["done", "one", "--yes"], vec!["done", "one", "--yes", "--force"]] {
+        let (ok, t) = agentgc(&repo, &args);
+        assert!(!ok && t.contains("no `.git` file"), "{t}");
+        assert!(wt.join(".hidden").exists() && reg(&repo, "one").exists());
+        assert!(git_try(&repo, &["rev-parse", "--verify", "refs/heads/one"]));
+    }
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn resume_refuses_when_git_still_lists_worktree() {
+    need_git!();
+    let base = tmp("resume-listed");
+    let repo = make_repo(&base, "");
+    new_task(&repo, "one");
+    let wt = repo.join("worktrees").join("one");
+    // empty the folder but leave git's record in place
+    fs::remove_dir_all(&wt).unwrap();
+    fs::create_dir_all(&wt).unwrap();
+    assert!(git(&repo, &["worktree", "list", "--porcelain"]).contains("worktrees/one"));
+    let (ok, t) = agentgc(&repo, &["done", "one", "--yes", "--force"]);
+    assert!(!ok && t.contains("git still lists it"), "{t}");
+    assert!(wt.is_dir() && reg(&repo, "one").exists());
+    assert!(git_try(&repo, &["rev-parse", "--verify", "refs/heads/one"]));
+    let _ = fs::remove_dir_all(&base);
+}
