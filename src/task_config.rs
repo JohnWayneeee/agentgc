@@ -135,11 +135,13 @@ pub struct DbCfg {
     pub name: String,
     pub create: String,
     pub drop: String,
+    /// Optional command run before `drop` by `done --yes` (same placeholders).
+    pub disconnect: String,
 }
 
 impl Default for DbCfg {
     fn default() -> Self {
-        Self { name: "{repo}_{name}".into(), create: String::new(), drop: String::new() }
+        Self { name: "{repo}_{name}".into(), create: String::new(), drop: String::new(), disconnect: String::new() }
     }
 }
 

@@ -210,6 +210,42 @@ fn drop_template_runs_with_yes() {
 }
 
 #[test]
+fn disconnect_runs_before_drop_with_yes() {
+    need_git!();
+    let base = tmp("disc");
+    let repo = make_repo(&base, "[db]
+disconnect=\"git config agentgc.order {db}\"
+drop=\"git config --add agentgc.order dropped\"
+");
+    new_task(&repo, "one");
+    let (ok, t) = agentgc(&repo, &["done", "one"]);
+    assert!(ok && t.contains("run disconnect command: git config agentgc.order proj_one"), "{t}");
+    assert!(!git_try(&repo, &["config", "--get", "agentgc.order"]), "dry run must not run disconnect");
+    let (ok, t) = agentgc(&repo, &["done", "one", "--yes"]);
+    assert!(ok, "{t}");
+    let got = git(&repo, &["config", "--get-all", "agentgc.order"]);
+    let lines: Vec<&str> = got.lines().map(|l| l.trim()).collect();
+    assert_eq!(lines, ["proj_one", "dropped"]);
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn disconnect_failure_skips_drop() {
+    need_git!();
+    let base = tmp("discfail");
+    let repo = make_repo(&base, "[db]
+disconnect=\"git no-such-subcommand-xyz\"
+drop=\"git config agentgc.dropped {db}\"
+");
+    new_task(&repo, "one");
+    let (ok, _) = agentgc(&repo, &["done", "one", "--yes"]);
+    assert!(!ok);
+    assert!(!git_try(&repo, &["config", "--get", "agentgc.dropped"]));
+    assert!(reg(&repo, "one").exists());
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
 fn incomplete_entry_can_be_removed() {
     need_git!();
     let base = tmp("creating");

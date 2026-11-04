@@ -189,6 +189,7 @@ range = [3100, 3999]
 [db]
 name = "{repo}_{name}"     # a NAME only; agentgc never talks to a database server
 create = ""                # optional command template, for example "createdb {db}"
+disconnect = ""            # optional command run by `done --yes` before `drop` ({db} {name}); never run by `new`
 drop = ""                  # command template run by `done --yes` ({db} {name}); never run by `new`
 [env]
 TASK_ID = "{name}"
@@ -352,8 +353,9 @@ Steps with `--yes` (the first failure stops the run and the already done steps a
 
 - a. With `--kill-procs`: stop the stoppable processes (never `agentgc` itself), wait up to 3 s, report each pid.
   Without it: "not stopped (use --kill-procs)".
-- b. A non-empty `drop` template from the registry entry runs with `{db}` and `{name}` filled (whitespace split, no
-  shell, cwd = repo root). A failure aborts, unless `--force`.
+- b. A non-empty `disconnect` template runs first (use it to kill stale DB connections; your own command, agentgc has
+  no SQL), then `drop`. Both come from the registry entry with `{db}` and `{name}` filled (whitespace split, no
+  shell, cwd = repo root). A failure of either aborts, unless `--force`.
 - c. Deletes the supervisor's generated files (see "Supervisor"), then `<worktree>/.agentgc/task.env`, then `.agentgc` only if it is empty.
 - d. `git worktree remove <path>`; `--force` is passed to git only when you passed `--force`. If git refuses, the
   message is printed and `done` stops. The folder is never deleted by any other means.
@@ -521,8 +523,8 @@ After a write, restart the agent or open a new session so it re-reads the rules.
 
 `clean` runs no command from the rules, but it deletes. Read every rule path first and use `--dry-run`.
 
-`agentgc.task.toml` can name commands: `db.create` and `setup.commands` run with `new --run-setup`, and `db.drop`
-(stored in the registry) runs with `done --yes`. They run as you, without a shell. Review the file like a Makefile.
+`agentgc.task.toml` can name commands: `db.create` and `setup.commands` run with `new --run-setup`, and `db.disconnect`
+and `db.drop` (stored in the registry) run with `done --yes`. They run as you, without a shell. Review the file like a Makefile.
 Never run `new --run-setup` or `done --yes` from a repo you do not trust.
 
 ## Rules format

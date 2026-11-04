@@ -31,6 +31,9 @@ pub struct Entry {
     pub created_at: u64,
     pub setup_done: bool,
     pub drop: String,
+    /// Command run before `drop`. Old entries have none.
+    #[serde(default)]
+    pub disconnect: String,
     /// `creating` while `new` runs (or after it failed), `ready` when done.
     /// Old entries have no state and count as ready.
     #[serde(default = "ready_state")]
@@ -75,6 +78,7 @@ pub struct Plan {
     pub create: Option<String>,
     pub setup: Vec<String>,
     pub drop_tpl: String,
+    pub disconnect_tpl: String,
     pub compose: Option<ComposePlan>,
     /// Route name and `<name>.<task>.localhost:<port>`.
     pub routes: Vec<(String, String)>,
@@ -307,6 +311,7 @@ pub fn build_plan(
         create,
         setup,
         drop_tpl: cfg.db.drop.clone(),
+        disconnect_tpl: cfg.db.disconnect.clone(),
         compose: compose_plan,
         routes,
         services,
@@ -408,6 +413,9 @@ fn print_plan(p: &Plan, run_setup: bool, config_note: &str) {
         } else {
             outln!("  {kind}: {c}  (not run, use --run-setup)");
         }
+    }
+    if !p.disconnect_tpl.trim().is_empty() {
+        outln!("  disconnect: stored for `task done --yes`, never run by `new`");
     }
     if !p.drop_tpl.trim().is_empty() {
         outln!("  drop: stored for `task done --yes`, never run by `new`");
@@ -511,6 +519,7 @@ pub fn execute(p: &Plan, run_setup: bool) -> Result<(), String> {
         created_at: now_secs(),
         setup_done: false,
         drop: p.drop_tpl.clone(),
+        disconnect: p.disconnect_tpl.clone(),
         state: "creating".into(),
         compose_file: p.compose.as_ref().map(|c| c.output.clone()).unwrap_or_default(),
         routes: p.routes.iter().cloned().collect(),

@@ -398,6 +398,17 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         }
     }
 
+    let mut disconnect_cmd: Option<String> = None;
+    if !entry.disconnect.trim().is_empty() {
+        match tc::fill(&entry.disconnect, &vars) {
+            Ok(c) => disconnect_cmd = Some(c),
+            Err(e) => {
+                outln!("  {} the disconnect template does not fill: {e}", tag(false));
+                blockers.push(("disconnect template does not fill".into(), "the db disconnect step (skipped)".into()));
+            }
+        }
+    }
+
     let stoppable: Vec<&Found> = found.iter().filter(|f| f.stoppable).collect();
     outln!("Steps with --yes:");
     if sup_alive && a.stop_services {
@@ -409,6 +420,9 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         outln!("  a. not stopped (use --kill-procs)");
     } else {
         outln!("  a. no process to stop");
+    }
+    if let Some(c) = &disconnect_cmd {
+        outln!("  b. run disconnect command: {c}");
     }
     match &drop_cmd {
         Some(c) => outln!("  b. run drop command: {c}"),
@@ -469,7 +483,7 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
 
     out::set_critical(true);
     let mut done: Vec<String> = Vec::new();
-    let res = execute(a, &root, &entry, &t, resume_dir, &found, drop_cmd.as_deref(), branch_exists, &reg, compose_rel.as_deref(), &generated, &mut done);
+    let res = execute(a, &root, &entry, &t, resume_dir, &found, disconnect_cmd.as_deref(), drop_cmd.as_deref(), branch_exists, &reg, compose_rel.as_deref(), &generated, &mut done);
     if let Err(e) = &res {
         outln!("Stopped at the first failure. Already done:");
         if done.is_empty() {
@@ -531,6 +545,7 @@ fn execute(
     t: &Target,
     resume_dir: bool,
     found: &[Found],
+    disconnect_cmd: Option<&str>,
     drop_cmd: Option<&str>,
     branch_exists: bool,
     reg: &Path,
@@ -574,7 +589,14 @@ fn execute(
         outln!("  {} process(es) left running; the folder may stay locked on Windows", left.len());
     }
 
-    // b. drop
+    // b. disconnect, then drop
+    if let Some(c) = disconnect_cmd {
+        match task::run_command(c, root) {
+            Ok(()) => done.push(format!("ran disconnect command: {c}")),
+            Err(e) if a.force => outln!("  FORCE: disconnect failed, continuing: {e}"),
+            Err(e) => return Err(format!("disconnect failed, nothing else was changed: {e}")),
+        }
+    }
     if let Some(c) = drop_cmd {
         match task::run_command(c, root) {
             Ok(()) => done.push(format!("ran drop command: {c}")),
