@@ -92,6 +92,26 @@ cargo install --path .
 
 Or run `cargo build --release` and use `target/release/agentgc`.
 
+<h3 align="center" id="install-with-an-agent">Install with an agent</h3>
+
+<p align="center">
+  Give this prompt to Claude Code, Codex or another coding agent:
+</p>
+
+```text
+Install agentgc on this computer. Project: https://github.com/JohnWayneeee/agentgc
+
+1. Detect my system. Download the archive for it from the latest release at https://github.com/JohnWayneeee/agentgc/releases/latest: zip for Windows, tar.gz for Linux, tar.gz for macOS (Apple Silicon). If there is no archive for my system, clone the repo and run `cargo install --path .` in it.
+2. Check the archive against the `.sha256` file next to it. If the check fails, stop and tell me.
+3. Put the `agentgc` binary on PATH. Ask me first before you change PATH or any other system setting.
+4. Run `agentgc --version` and show me the output.
+5. Run `agentgc init` in my project folder. It prints a plan and writes files only after I agree. Show me the plan. Write nothing until I say yes. Never use `--force`. Never run `agentgc clean`.
+```
+
+The agent needs your OK before it changes PATH and before it writes the rules.
+
+On Windows, SmartScreen may warn on the first start, because the exe is not code signed yet.
+
 Put the task settings in `agentgc.task.toml` in the repo root:
 
 <details>
