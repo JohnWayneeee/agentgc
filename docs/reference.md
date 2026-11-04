@@ -574,8 +574,8 @@ After a write, restart the agent or open a new session so it re-reads the rules.
 ## Claude Code hooks (`hook`)
 
 ```
-agentgc hook install [--global] [--dir PATH] [--apply]
-agentgc hook pre-tool-use      # PreToolUse hook: JSON on stdin
+agentgc hook install [--global] [--dir PATH] [--apply] [--allow]
+agentgc hook pre-tool-use [--allow]  # PreToolUse hook: JSON on stdin
 agentgc hook session-start     # SessionStart hook
 ```
 
@@ -590,7 +590,9 @@ Rules are only advice. The hooks make Claude Code follow them.
   `npm|pnpm|yarn|bun run build|test|e2e|lint|typecheck`, `bun test`, `go test|build`, `dotnet test|build`,
   `gradle test|build`, `mvn test|package|verify`, `pytest`, `tsc`. Commands with shell syntax (`& | ; < > $`, quotes,
   backslash, globs, a leading `VAR=`) and commands that already start with `agentgc` are not touched. The output sets
-  `permissionDecision: allow`, so the wrapped command skips the permission prompt. Bad input: no output, no change.
+  `permissionDecision: ask` by default: Claude Code still shows the rewritten command and the user approves it.
+  `--allow` is an explicit opt-in that sets `allow`, so the wrapped command skips the prompt. `hook install --allow`
+  writes `agentgc hook pre-tool-use --allow` into the generated hook command. Bad input: no output, no change.
 - **`session-start`.** Prints `agentgc status` (when the folder is a task) and `.agentgc/task.env`, plus one line
   that tells the agent to use `agentgc run --` for heavy commands. Claude Code adds the output to the context.
 

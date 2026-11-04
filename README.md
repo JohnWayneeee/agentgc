@@ -194,7 +194,7 @@ agentgc init --global-skill           # also the skill for all your projects
 
 `init` prints a plan for `AGENTS.md`, `CLAUDE.md` and `.claude/skills/agentgc/SKILL.md`, then asks `Write this? [y/N/q]` for each file. It adds only a marked block to `AGENTS.md` and `CLAUDE.md` and keeps a `.agentgc.bak` copy. It never overwrites an existing `SKILL.md`. Without a terminal, name the files with `--yes-target`. `agentgc init --print` prints the snippet and writes nothing. Restart the agent afterwards so it reads the rules.
 
-Rules are only advice. To make Claude Code obey, add hooks. `agentgc hook install` prints the `settings.json` snippet and writes nothing. `--apply` merges it (with a `.agentgc.bak` copy; `--global` for all projects). The PreToolUse hook wraps plain `cargo test`, `npm run build` and similar calls in `agentgc run --`. The SessionStart hook prints `agentgc status` and the task env.
+Rules are only advice. To make Claude Code obey, add hooks. `agentgc hook install` prints the `settings.json` snippet and writes nothing. `--apply` merges it (with a `.agentgc.bak` copy; `--global` for all projects). The PreToolUse hook wraps plain `cargo test`, `npm run build` and similar calls in `agentgc run --`. The rewritten command still asks for your approval (`permissionDecision: ask`). To skip the prompt, opt in with `agentgc hook install --allow` (or `--allow` on `hook pre-tool-use`). The SessionStart hook prints `agentgc status` and the task env.
 
 <details>
 <summary>Or do it by hand</summary>

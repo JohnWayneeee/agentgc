@@ -266,7 +266,11 @@ enum TaskCmd {
 #[derive(Subcommand)]
 enum HookCmd {
     /// PreToolUse hook: reads the hook JSON on stdin, wraps heavy Bash commands in `agentgc run --`.
-    PreToolUse,
+    PreToolUse {
+        /// Output permissionDecision "allow" (skips the permission prompt). Default: "ask".
+        #[arg(long)]
+        allow: bool,
+    },
     /// SessionStart hook: prints `agentgc status` and `.agentgc/task.env`.
     SessionStart,
     /// Print the settings.json snippet. With --apply, merge it into the settings file (backup first).
@@ -280,6 +284,9 @@ enum HookCmd {
         /// Really edit the settings file. Without it nothing is written.
         #[arg(long)]
         apply: bool,
+        /// Write `--allow` into the generated pre-tool-use hook command (wrapped commands skip the prompt).
+        #[arg(long)]
+        allow: bool,
     },
 }
 
@@ -303,9 +310,9 @@ fn run() -> Result<(), String> {
             init::cmd_init(&init::InitArgs { agents_md, claude_md, skill, global_skill, dir, yes_target, print })
         }
         Cmd::Hook { cmd } => match cmd {
-            HookCmd::PreToolUse => hook::cmd_pre_tool_use(),
+            HookCmd::PreToolUse { allow } => hook::cmd_pre_tool_use(allow),
             HookCmd::SessionStart => hook::cmd_session_start(),
-            HookCmd::Install { global, dir, apply } => hook::cmd_install(&hook::InstallArgs { global, dir, apply }),
+            HookCmd::Install { global, dir, apply, allow } => hook::cmd_install(&hook::InstallArgs { global, dir, apply, allow }),
         },
         Cmd::Run(a) => {
             let code = run::cmd_run(&a)?;

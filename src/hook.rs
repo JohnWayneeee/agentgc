@@ -9,6 +9,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 pub const PRE_CMD: &str = "agentgc hook pre-tool-use";
+pub const PRE_CMD_ALLOW: &str = "agentgc hook pre-tool-use --allow";
 pub const START_CMD: &str = "agentgc hook session-start";
 
 /// Shell syntax we never rewrite: the command is not one plain program call.
@@ -63,7 +64,7 @@ pub fn rewrite_command(cmd: &str) -> Option<String> {
 }
 
 /// Hook input JSON in, hook output JSON out. None: no opinion, the tool call goes on unchanged.
-pub fn pre_tool_use(input: &str) -> Option<String> {
+pub fn pre_tool_use(input: &str, allow: bool) -> Option<String> {
     let v: Value = serde_json::from_str(input).ok()?;
     if v.get("tool_name")?.as_str()? != "Bash" {
         return None;
@@ -74,7 +75,7 @@ pub fn pre_tool_use(input: &str) -> Option<String> {
     updated.insert("command".into(), Value::String(new.clone()));
     let out = json!({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
-        "permissionDecision": "allow",
+        "permissionDecision": if allow { "allow" } else { "ask" },
         "permissionDecisionReason": format!("agentgc hook: queued heavy command ({new})"),
         "updatedInput": updated,
     }});
@@ -98,9 +99,10 @@ pub fn session_text(status: &str, env: &str) -> String {
     s
 }
 
-pub fn snippet() -> Value {
+pub fn snippet(allow: bool) -> Value {
+    let pre = if allow { PRE_CMD_ALLOW } else { PRE_CMD };
     json!({"hooks": {
-        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": PRE_CMD}]}],
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": pre}]}],
         "SessionStart": [{"hooks": [{"type": "command", "command": START_CMD}]}],
     }})
 }
@@ -114,13 +116,14 @@ fn has_command(entries: &[Value], cmd: &str) -> bool {
 }
 
 /// Adds our two hook entries to a settings object. Returns whether anything changed.
-pub fn merge_settings(settings: &mut Value) -> Result<bool, String> {
+pub fn merge_settings(settings: &mut Value, allow: bool) -> Result<bool, String> {
     let root = settings.as_object_mut().ok_or("settings.json is not a JSON object")?;
     let hooks = root.entry("hooks").or_insert_with(|| json!({}));
     let hooks = hooks.as_object_mut().ok_or("\"hooks\" is not an object")?;
     let mut changed = false;
-    let snip = snippet();
-    for (event, cmd) in [("PreToolUse", PRE_CMD), ("SessionStart", START_CMD)] {
+    let snip = snippet(allow);
+    let pre = if allow { PRE_CMD_ALLOW } else { PRE_CMD };
+    for (event, cmd) in [("PreToolUse", pre), ("SessionStart", START_CMD)] {
         let list = hooks.entry(event).or_insert_with(|| json!([]));
         let list = list.as_array_mut().ok_or_else(|| format!("hooks.{event} is not an array"))?;
         if !has_command(list, cmd) {
@@ -135,6 +138,7 @@ pub struct InstallArgs {
     pub global: bool,
     pub dir: Option<PathBuf>,
     pub apply: bool,
+    pub allow: bool,
 }
 
 fn settings_path(a: &InstallArgs, get: &dyn Fn(&str) -> Option<String>) -> Result<PathBuf, String> {
@@ -170,7 +174,7 @@ pub fn run_install(a: &InstallArgs, get: &dyn Fn(&str) -> Option<String>) -> Res
             .map_err(|e| format!("{} is not valid JSON: {e}; refused", path.display()))?,
         _ => json!({}),
     };
-    let changed = merge_settings(&mut settings)?;
+    let changed = merge_settings(&mut settings, a.allow)?;
     if !changed {
         out.push_str("Already up to date: both hooks are present.\n");
         return Ok(out);
@@ -178,7 +182,7 @@ pub fn run_install(a: &InstallArgs, get: &dyn Fn(&str) -> Option<String>) -> Res
     let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())? + "\n";
     if !a.apply {
         out.push_str("Dry run. Nothing was written. Add this to the settings (or run again with --apply):\n");
-        out.push_str(&serde_json::to_string_pretty(&snippet()).map_err(|e| e.to_string())?);
+        out.push_str(&serde_json::to_string_pretty(&snippet(a.allow)).map_err(|e| e.to_string())?);
         out.push('\n');
         return Ok(out);
     }
@@ -199,11 +203,11 @@ pub fn run_install(a: &InstallArgs, get: &dyn Fn(&str) -> Option<String>) -> Res
     Ok(out)
 }
 
-pub fn cmd_pre_tool_use() -> Result<(), String> {
+pub fn cmd_pre_tool_use(allow: bool) -> Result<(), String> {
     let mut s = String::new();
     // A hook must never break the tool call: unreadable input means no opinion.
     if std::io::stdin().read_to_string(&mut s).is_ok() {
-        if let Some(o) = pre_tool_use(&s) {
+        if let Some(o) = pre_tool_use(&s, allow) {
             println!("{o}");
         }
     }
@@ -240,7 +244,11 @@ mod tests {
     }
 
     fn inst(dir: &PathBuf, apply: bool) -> Result<String, String> {
-        run_install(&InstallArgs { global: false, dir: Some(dir.clone()), apply }, &|_| None)
+        run_install(&InstallArgs { global: false, dir: Some(dir.clone()), apply, allow: false }, &|_| None)
+    }
+
+    fn inst_allow(dir: &PathBuf) -> Result<String, String> {
+        run_install(&InstallArgs { global: false, dir: Some(dir.clone()), apply: true, allow: true }, &|_| None)
     }
 
     #[test]
@@ -284,21 +292,38 @@ mod tests {
     #[test]
     fn pre_tool_use_json() {
         let inp = r#"{"tool_name":"Bash","tool_input":{"command":"cargo test","description":"d","timeout":5}}"#;
-        let v: Value = serde_json::from_str(&pre_tool_use(inp).unwrap()).unwrap();
+        let v: Value = serde_json::from_str(&pre_tool_use(inp, false).unwrap()).unwrap();
         let o = &v["hookSpecificOutput"];
         assert_eq!(o["hookEventName"], "PreToolUse");
         assert_eq!(o["updatedInput"]["command"], "agentgc run -- cargo test");
         assert_eq!(o["updatedInput"]["description"], "d");
         assert_eq!(o["updatedInput"]["timeout"], 5);
-        assert_eq!(o["permissionDecision"], "allow");
+        assert_eq!(o["permissionDecision"], "ask");
+    }
+
+    #[test]
+    fn pre_tool_use_allow_flag_sets_allow() {
+        let inp = r#"{"tool_name":"Bash","tool_input":{"command":"cargo test"}}"#;
+        let v: Value = serde_json::from_str(&pre_tool_use(inp, true).unwrap()).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["permissionDecision"], "allow");
+    }
+
+    #[test]
+    fn install_allow_writes_flag_into_command() {
+        let d = tmp("allow");
+        inst_allow(&d).unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(d.join(".claude/settings.json")).unwrap()).unwrap();
+        assert_eq!(v["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "agentgc hook pre-tool-use --allow");
+        assert_eq!(v, snippet(true));
+        let _ = fs::remove_dir_all(&d);
     }
 
     #[test]
     fn pre_tool_use_no_opinion() {
-        assert!(pre_tool_use(r#"{"tool_name":"Read","tool_input":{"command":"cargo test"}}"#).is_none());
-        assert!(pre_tool_use(r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#).is_none());
-        assert!(pre_tool_use("not json").is_none());
-        assert!(pre_tool_use("{}").is_none());
+        assert!(pre_tool_use(r#"{"tool_name":"Read","tool_input":{"command":"cargo test"}}"#, false).is_none());
+        assert!(pre_tool_use(r#"{"tool_name":"Bash","tool_input":{"command":"ls"}}"#, false).is_none());
+        assert!(pre_tool_use("not json", false).is_none());
+        assert!(pre_tool_use("{}", false).is_none());
     }
 
     #[test]
@@ -327,7 +352,7 @@ mod tests {
         let d = tmp("apply");
         inst(&d, true).unwrap();
         let v: Value = serde_json::from_str(&fs::read_to_string(d.join(".claude/settings.json")).unwrap()).unwrap();
-        assert_eq!(v, snippet());
+        assert_eq!(v, snippet(false));
         assert!(inst(&d, true).unwrap().contains("Already up to date"));
         assert!(!d.join(".claude/settings.json.agentgc.bak").exists());
         let _ = fs::remove_dir_all(&d);
@@ -371,7 +396,7 @@ mod tests {
         let h = tmp("home");
         let hs = h.to_string_lossy().into_owned();
         let get = move |k: &str| if k == "HOME" { Some(hs.clone()) } else { None };
-        let a = InstallArgs { global: true, dir: None, apply: true };
+        let a = InstallArgs { global: true, dir: None, apply: true, allow: false };
         run_install(&a, &get).unwrap();
         assert!(h.join(".claude/settings.json").is_file());
         assert!(run_install(&a, &|_| None).is_err());
