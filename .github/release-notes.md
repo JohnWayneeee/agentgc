@@ -1,8 +1,13 @@
-First public release. agentgc gives each AI coding agent task its own environment: a git worktree, free ports, a database name and an env file. It can run the services of a task, queue heavy commands, and clean up afterwards, always with a plan and a question first.
+agentgc gives each AI coding agent task its own environment: a git worktree, free ports, a database name and an env file. It can run the services of a task, queue heavy commands, and clean up afterwards, always with a plan and a question first.
 
 agentgc does not start AI agents. It prepares and cleans the environment around them.
 
-## What is in 0.1.0
+## What is new in 0.2.0
+
+- `agentgc task list` shows the state of every task: changed files, commits ahead and behind the base branch, and how many services run. `--json` has the same fields. The command only reads.
+- Services can wait for each other. In `[services.NAME]` set `depends_on = ["db"]` and `ready_timeout = 30`. A service with a `port` is ready when the port accepts a connection. `up` starts the services in order, and `status` has a READY column. A cycle or an unknown name is refused at load time.
+
+## What is in the tool
 
 | Area | Commands |
 |---|---|
@@ -18,9 +23,9 @@ Full command list: [README](https://github.com/JohnWayneeee/agentgc#commands) an
 
 | System | File |
 |---|---|
-| Windows (x64) | `agentgc-v0.1.0-x86_64-pc-windows-msvc.zip` |
-| Linux (x64) | `agentgc-v0.1.0-x86_64-unknown-linux-gnu.tar.gz` |
-| macOS (Apple Silicon) | `agentgc-v0.1.0-aarch64-apple-darwin.tar.gz` |
+| Windows (x64) | `agentgc-VERSION-x86_64-pc-windows-msvc.zip` |
+| Linux (x64) | `agentgc-VERSION-x86_64-unknown-linux-gnu.tar.gz` |
+| macOS (Apple Silicon) | `agentgc-VERSION-aarch64-apple-darwin.tar.gz` |
 
 Each archive holds the binary, the README and the license. Unpack it and put `agentgc` on your `PATH`. Other systems, such as Intel Macs: build from source with `cargo install --path .`.
 

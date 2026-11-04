@@ -68,7 +68,7 @@
 | | |
 |---|---|
 | **Isolate** | One worktree, free ports, a database name and an env file per task. Optional compose file and `*.localhost` route per task. |
-| **Supervise** | `up`, `down`, `status`, `logs` and `restart` run plain processes per task. Opt-in, no system service, no network port. |
+| **Supervise** | `up`, `down`, `status`, `logs` and `restart` run plain processes per task. Opt-in, no system service, no network port. A service can wait for another one with `depends_on`. |
 | **Queue** | `run` lets heavy commands take turns and guards named exclusive resources, such as one phone or one browser profile. |
 | **Clean** | `scan` and `clean` remove junk one item at a time. `task done` removes a finished task. `ps --stop` stops idle servers. |
 
@@ -107,6 +107,7 @@ create = "createdb {db}"
 [services.web]
 cmd = "npm run dev -- --port {{port.web}}"
 port = "web"
+depends_on = ["api"]
 
 [services.api]
 cmd = "cargo run -- --port {{port.api}} --db {{db}}"
@@ -121,7 +122,8 @@ Then, in the repo root:
 ```sh
 agentgc task new feat-login --yes    # worktree, ports, env file, services
 agentgc up --task feat-login         # start the services
-agentgc status --task feat-login     # pid, state and URL per service
+agentgc status --task feat-login     # pid, state, ready and URL per service
+agentgc task list                    # changed files, ahead/behind, services per task
 agentgc down --task feat-login       # stop the services
 agentgc task done feat-login --yes   # remove the task (refuses unsaved work)
 ```
@@ -160,7 +162,7 @@ supervisor started (pid 27980)
 | `agentgc clean` | Deletes listed junk one item at a time, with a confirmation for each item. |
 | `agentgc ps` | Shows which processes belong to which task, with their RAM. Read-only. |
 | `agentgc ps --stop` | Stops idle dev servers, language servers, tests and builds. Dry run by default. |
-| `agentgc task new` / `list` / `done` | Creates, lists and removes a task environment: worktree, ports, env file, database name. |
+| `agentgc task new` / `list` / `done` | Creates, lists and removes a task environment: worktree, ports, env file, database name. `list` also shows changed files, ahead/behind and running services. |
 | `agentgc up` / `down` / `status` / `logs` / `restart` | Starts, stops, restarts and checks a task's services, and shows their logs. |
 | `agentgc run` | Queues heavy commands so only some run at once. Guards named exclusive resources. |
 | `agentgc init` | Installs the agent rules into `AGENTS.md`, `CLAUDE.md` and a Claude Code skill, after you confirm each file. |
