@@ -218,6 +218,18 @@ in URLs and values of keys that contain SECRET, TOKEN, PASSWORD or KEY. A hint a
 
 `task list` is read-only. Per task: name, path, branch, ports, db, age in days, status `ok`, `missing` (folder gone),
 `dirty` (`git status --porcelain` prints something), `unknown` (git failed) or `incomplete` (state `creating`).
+`task list` also shows the state of each task on one line, `state:`:
+
+- **CHANGED**: number of uncommitted files. It counts the lines of `git --no-optional-locks status --porcelain` in the worktree.
+- **AHEAD/BEHIND**: `ahead/behind`. Commits that the task branch has and the base branch lacks, and the other way round
+  (`git rev-list --left-right --count <branch>...<base>`). The base is the one in the registry entry.
+- **SERVICES**: `running/total`. `total` is the number of declared services. A service counts as running when the pid in
+  `.agentgc/daemon.json` still has the recorded start time and process name. `-` when the task has no service.
+
+When the worktree folder is missing, all three show `-`. When git fails for one task, the git values show `?` and the
+command still succeeds. `--json` has the same values as `changed`, `ahead`, `behind` (`null` for `-` and `?`),
+`services_running` and `services_total`. The state is read-only: no lock, no file write, no index refresh.
+
 `task new` and `task list` never delete anything. Printing never panics on a closed stdout (`| head`).
 
 ### Compose file per task (`[compose]`, `[routes]`)
@@ -282,6 +294,8 @@ port = "web"                                # optional: a name from [ports]; add
 cmd = "cargo run -- --port {{port.api}} --db {{db}}"
 cwd = "apps/api"
 port = "api"
+depends_on = ["db"]                         # optional: start only after these services are ready
+ready_timeout = 30                          # optional: seconds `up` waits until this service is ready (default 30)
 ```
 
 - Rendering happens at plan time with the compose renderer. An unknown placeholder is an error that names it, and
@@ -297,8 +311,12 @@ port = "api"
 - `task done --yes` removes only the recorded files, with `remove_file`: each must be a plain file (no symlink),
   untracked, and inside the worktree. Same checks as for the compose file. `.agentgc/` stays out of the
   uncommitted-work check.
+- `depends_on` and `ready_timeout` are copied to `services.json`. Services without them behave as before.
 - Checks at load time: the service name follows the task name rules, `cmd` is not empty, `cwd` is relative without
-  `..`, `port` is a name in `ports.names`.
+  `..`, `port` is a name in `ports.names`, `ready_timeout` is 1 to 3600. Every `depends_on` name must be a service.
+  A service must not depend on itself. A cycle is an error. Each error names the services (for example
+  `service "api" depends on unknown service "db"` or `dependency cycle: a -> b -> a`). `up` runs the same checks on
+  `services.json` before it starts anything.
 
 ### `task done`
 
@@ -371,7 +389,17 @@ with the same path guard as `task done`).
 - **One supervisor per task.** It holds an exclusive lock on `.agentgc/daemon.lock` (same lock layer as `run`; the OS frees
   it when the holder dies). A second `up` prints "already running" and exits 0.
 - **State:** `.agentgc/daemon.json` (written to a temp file, then renamed): supervisor pid, start time and process name;
-  per service pid, start time, process name, restarts, state (`running`, `backoff`, `finished`, `failed`, `stopped`), port.
+  per service pid, start time, process name, restarts, state (`running`, `backoff`, `finished`, `failed`, `stopped`,
+  `waiting`, `blocked`), port, and an error text for a `waiting` or `blocked` service.
+- **Order and readiness.** A service is ready when it has a `port` and `127.0.0.1:<port>` accepts a TCP connection (the
+  only network call agentgc makes: a connect to 127.0.0.1). A service without `port` is ready when it runs. Services
+  without `depends_on` start at once. A service with `depends_on` has the state `waiting` until all its dependencies are
+  ready; then it starts. The supervisor checks every 500 ms. The wait for a dependency ends after the `ready_timeout` of
+  that dependency, counted from its first start. Then the service is `blocked`: it is never started, and `status` shows
+  why. A service whose dependency is `failed` or `blocked` is `blocked` at once. The dependency itself keeps running and
+  the restart policy below still applies to it. A late port does not unblock a service. `restart NAME` starts a
+  `blocked` service anyway. `up` waits until no service is `waiting`, prints the table and, when a service is `blocked`,
+  exits with an error that names the service that was not ready. The supervisor stays up.
 - **Restart policy:** a service that exits with a non-zero code (or is killed) restarts after 1, 2, 4, 8, 8 s. A crash while
   5 restarts sit inside the last 60 s marks it `failed`: no more retries. Exit code 0 is `finished`: no restart.
   `restart NAME` writes the marker `.agentgc/restart.<name>`; the supervisor (polls every 500 ms) restarts that service and
@@ -389,7 +417,8 @@ with the same path guard as `task done`).
   refused. A pid without a recorded identity is never signaled. No hard kill without `--force`; on Windows a stop by pid
   needs `--force`.
 - **`status`** shows whether the supervisor is alive (the lock decides) and per service: pid, state, running (identity
-  checked), restarts, port and URL (the `AGENTGC_ROUTE_<NAME>` route when there is one, else `http://127.0.0.1:<port>`).
+  checked), ready (`yes` or `no` for a running service by the rule above, `-` for a service that does not run), restarts,
+  port and URL (the `AGENTGC_ROUTE_<NAME>` route when there is one, else `http://127.0.0.1:<port>`).
 - **`task done`** refuses while the supervisor is alive (`--force` does not skip this). `--stop-services` stops it first, as
   `down` does (its `--force` is passed on). `done --yes` also deletes the generated daemon files, each with `remove_file`
   and only by known name: `daemon.json`, `daemon.json.tmp`, `daemon.lock`, `daemon.stop`, `restart.<name>`, `logs/*.log`,

@@ -29,10 +29,65 @@ pub struct ServiceCfg {
     /// Optional name from `[ports]`; adds a route.
     #[serde(default)]
     pub port: Option<String>,
+    /// Services that must be ready before this one starts.
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// Seconds `up` waits until this service is ready, for services that depend on it.
+    #[serde(default = "default_ready_timeout")]
+    pub ready_timeout: u64,
+}
+
+pub const DEFAULT_READY_TIMEOUT: u64 = 30;
+pub const MAX_READY_TIMEOUT: u64 = 3600;
+
+fn default_ready_timeout() -> u64 {
+    DEFAULT_READY_TIMEOUT
 }
 
 fn dot() -> String {
     ".".into()
+}
+
+/// Check `depends_on` lists and return the names in start order (dependencies first; the input
+/// order is kept where it does not matter). Errors name the problem: unknown dependency,
+/// self-dependency, cycle.
+pub fn order_by_deps(items: &[(String, Vec<String>)]) -> Result<Vec<String>, String> {
+    for (n, deps) in items {
+        for d in deps {
+            if d == n {
+                return Err(format!("service {n:?} depends on itself"));
+            }
+            if !items.iter().any(|(m, _)| m == d) {
+                return Err(format!("service {n:?} depends on unknown service {d:?}"));
+            }
+        }
+    }
+    let mut done: Vec<String> = Vec::new();
+    while done.len() < items.len() {
+        let next = items
+            .iter()
+            .find(|(n, deps)| !done.contains(n) && deps.iter().all(|d| done.contains(d)));
+        match next {
+            Some((n, _)) => done.push(n.clone()),
+            None => {
+                // every rest service waits for another rest service: follow the chain to the cycle
+                let rest: Vec<&(String, Vec<String>)> = items.iter().filter(|(n, _)| !done.contains(n)).collect();
+                let mut path: Vec<String> = vec![rest[0].0.clone()];
+                loop {
+                    let cur = path.last().unwrap().clone();
+                    let (_, deps) = rest.iter().find(|(n, _)| *n == cur).unwrap();
+                    let nxt = deps.iter().find(|d| !done.contains(d)).unwrap().clone();
+                    if let Some(i) = path.iter().position(|p| *p == nxt) {
+                        let mut cyc: Vec<String> = path[i..].to_vec();
+                        cyc.push(nxt);
+                        return Err(format!("dependency cycle: {}", cyc.join(" -> ")));
+                    }
+                    path.push(nxt);
+                }
+            }
+        }
+    }
+    Ok(done)
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -180,7 +235,12 @@ fn validate(c: &Config) -> Result<(), String> {
                 return Err(format!("services.{n}.port points to port {p:?}, which is not in ports.names"));
             }
         }
+        if s.ready_timeout == 0 || s.ready_timeout > MAX_READY_TIMEOUT {
+            return Err(format!("services.{n}.ready_timeout must be 1 to {MAX_READY_TIMEOUT} seconds"));
+        }
     }
+    let items: Vec<(String, Vec<String>)> = c.services.iter().map(|(n, s)| (n.clone(), s.depends_on.clone())).collect();
+    order_by_deps(&items).map_err(|e| format!("services.depends_on: {e}"))?;
     for k in c.env.vars.keys().chain(c.env.dynamic.keys()) {
         if !valid_env_key(k) {
             return Err(format!("env key {k:?} must match [A-Za-z_][A-Za-z0-9_]*"));

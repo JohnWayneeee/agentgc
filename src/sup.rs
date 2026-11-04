@@ -6,6 +6,8 @@ use crate::task_config as tc;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 use std::path::{Component, Path, PathBuf};
 
 pub const BACKOFF_MS: [u64; 4] = [1000, 2000, 4000, 8000];
@@ -22,6 +24,10 @@ pub const STATE_BACKOFF: &str = "backoff";
 pub const STATE_FINISHED: &str = "finished";
 pub const STATE_FAILED: &str = "failed";
 pub const STATE_STOPPED: &str = "stopped";
+/// Not started yet: a dependency is not ready.
+pub const STATE_WAITING: &str = "waiting";
+/// Never started: a dependency failed or was not ready in time. Stays visible in `status`.
+pub const STATE_BLOCKED: &str = "blocked";
 
 // ------------------------------------------------------------------ paths
 
@@ -71,10 +77,19 @@ pub struct ServiceDef {
     pub cwd: String,
     #[serde(default)]
     pub port: Option<u16>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// Seconds to wait until this service is ready (used by services that depend on it).
+    #[serde(default = "default_ready_timeout")]
+    pub ready_timeout: u64,
 }
 
 fn dot() -> String {
     ".".into()
+}
+
+fn default_ready_timeout() -> u64 {
+    tc::DEFAULT_READY_TIMEOUT
 }
 
 pub fn parse_services(text: &str) -> Result<Vec<ServiceDef>, String> {
@@ -89,7 +104,16 @@ pub fn parse_services(text: &str) -> Result<Vec<ServiceDef>, String> {
             return Err(format!("services.json: duplicate service {:?}", d.name));
         }
         seen.push(&d.name);
+        if d.ready_timeout == 0 || d.ready_timeout > tc::MAX_READY_TIMEOUT {
+            return Err(format!(
+                "services.json: service {:?}: ready_timeout must be 1 to {} seconds",
+                d.name,
+                tc::MAX_READY_TIMEOUT
+            ));
+        }
     }
+    let items: Vec<(String, Vec<String>)> = defs.iter().map(|d| (d.name.clone(), d.depends_on.clone())).collect();
+    tc::order_by_deps(&items).map_err(|e| format!("services.json: {e}"))?;
     Ok(defs)
 }
 
@@ -301,6 +325,30 @@ impl RestartPolicy {
     }
 }
 
+// ------------------------------------------------------------------ readiness
+
+/// Tests whether a local port answers. The real one is a TCP connect to 127.0.0.1 and nothing else.
+pub trait Prober {
+    fn port_open(&self, port: u16) -> bool;
+}
+
+pub struct TcpProber;
+
+impl Prober for TcpProber {
+    fn port_open(&self, port: u16) -> bool {
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
+    }
+}
+
+/// Ready: with a `port`, 127.0.0.1:port accepts a connection; without, the service is running.
+pub fn is_ready(port: Option<u16>, running: bool, prober: &dyn Prober) -> bool {
+    match port {
+        Some(p) => prober.port_open(p),
+        None => running,
+    }
+}
+
 // ------------------------------------------------------------------ engine
 
 pub trait ChildProc {
@@ -329,6 +377,8 @@ struct Svc {
     child: Option<Box<dyn ChildProc>>,
     st: SvcState,
     retry_at: Option<u64>,
+    /// Time of the first start; the ready timeout counts from here.
+    started_ms: Option<u64>,
 }
 
 pub struct Engine<'a> {
@@ -336,7 +386,10 @@ pub struct Engine<'a> {
     env: Vec<(String, String)>,
     spawner: &'a mut dyn Spawner,
     clock: &'a dyn Clock,
+    prober: &'a dyn Prober,
 }
+
+static TCP: TcpProber = TcpProber;
 
 impl<'a> Engine<'a> {
     pub fn new(
@@ -364,20 +417,97 @@ impl<'a> Engine<'a> {
                 policy: RestartPolicy::default(),
                 child: None,
                 retry_at: None,
+                started_ms: None,
             })
             .collect();
-        Engine { svcs, env, spawner, clock }
+        Engine { svcs, env, spawner, clock, prober: &TCP }
     }
 
+    /// Use another readiness probe (tests).
+    #[cfg(test)]
+    pub fn with_prober(mut self, prober: &'a dyn Prober) -> Engine<'a> {
+        self.prober = prober;
+        self
+    }
+
+    /// Start every service without dependencies; the others wait until their dependencies are ready.
     pub fn start_all(&mut self) {
         for i in 0..self.svcs.len() {
-            self.start(i);
+            if self.svcs[i].def.depends_on.is_empty() {
+                self.start(i);
+            } else {
+                let s = &mut self.svcs[i];
+                s.st.state = STATE_WAITING.into();
+                s.st.error = Some(format!("waiting for {}", s.def.depends_on.join(", ")));
+            }
+        }
+        self.advance_waiting();
+    }
+
+    fn ready(&self, j: usize) -> bool {
+        let s = &self.svcs[j];
+        is_ready(s.def.port, s.child.is_some() && s.st.state == STATE_RUNNING, self.prober)
+    }
+
+    /// Start waiting services whose dependencies are ready; block those whose dependency failed,
+    /// is blocked, or was not ready within its `ready_timeout`.
+    fn advance_waiting(&mut self) {
+        loop {
+            let mut changed = false;
+            for i in 0..self.svcs.len() {
+                if self.svcs[i].st.state != STATE_WAITING {
+                    continue;
+                }
+                let now = self.clock.now_ms();
+                let mut block: Option<String> = None;
+                let mut wait = false;
+                for d in self.svcs[i].def.depends_on.clone() {
+                    let Some(j) = self.svcs.iter().position(|s| s.def.name == d) else {
+                        block = Some(format!("unknown dependency {d}"));
+                        break;
+                    };
+                    let st = self.svcs[j].st.state.as_str();
+                    if st == STATE_BLOCKED || st == STATE_FAILED {
+                        block = Some(format!("dependency {d} is {st}"));
+                        break;
+                    }
+                    if self.ready(j) {
+                        continue;
+                    }
+                    let dj = &self.svcs[j];
+                    let limit = dj.def.ready_timeout.saturating_mul(1000);
+                    if dj.started_ms.map_or(false, |t| now >= t.saturating_add(limit)) {
+                        let what = match dj.def.port {
+                            Some(p) => format!("no connection on 127.0.0.1:{p}"),
+                            None => "not running".to_string(),
+                        };
+                        block = Some(format!("service {d} is not ready after {} s ({what})", dj.def.ready_timeout));
+                        break;
+                    }
+                    wait = true;
+                }
+                if let Some(msg) = block {
+                    let s = &mut self.svcs[i];
+                    s.st.state = STATE_BLOCKED.into();
+                    s.st.error = Some(msg);
+                    changed = true;
+                } else if !wait {
+                    self.start(i);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
         }
     }
 
     fn start(&mut self, i: usize) {
         let now = self.clock.now_ms();
         let s = &mut self.svcs[i];
+        if s.started_ms.is_none() {
+            s.started_ms = Some(now);
+        }
         match self.spawner.spawn(&s.def, &s.cwd, &self.env) {
             Ok(c) => {
                 s.st.pid = Some(c.pid());
@@ -430,6 +560,7 @@ impl<'a> Engine<'a> {
                 self.start(i);
             }
         }
+        self.advance_waiting();
     }
 
     fn manual_restart(&mut self, i: usize) {
@@ -496,9 +627,11 @@ impl<'a> Engine<'a> {
         }
     }
 
-    /// No service runs and none waits for a restart.
+    /// No service runs and none waits for a restart or for a dependency.
     pub fn all_done(&self) -> bool {
-        self.svcs.iter().all(|s| s.child.is_none() && (s.st.state == STATE_FINISHED || s.st.state == STATE_FAILED))
+        self.svcs.iter().all(|s| {
+            s.child.is_none() && (s.st.state == STATE_FINISHED || s.st.state == STATE_FAILED || s.st.state == STATE_BLOCKED)
+        })
     }
 
     pub fn snapshot(&self) -> Vec<SvcState> {
@@ -724,7 +857,10 @@ mod tests {
     }
 
     fn def(name: &str) -> (ServiceDef, PathBuf) {
-        (ServiceDef { name: name.into(), cmd: "x".into(), cwd: ".".into(), port: None }, PathBuf::from("."))
+        (
+            ServiceDef { name: name.into(), cmd: "x".into(), cwd: ".".into(), port: None, depends_on: vec![], ready_timeout: 30 },
+            PathBuf::from("."),
+        )
     }
 
     struct Rig {
@@ -891,6 +1027,147 @@ mod tests {
         e.stop_all();
         assert_eq!(r.log.borrow().terminates, vec![(101, false), (101, true)]);
         assert!(r.clock.now_ms() < GRACE_MS);
+    }
+
+    // ---- readiness and order
+
+    struct FakeProbe(RefCell<Vec<u16>>);
+    impl Prober for FakeProbe {
+        fn port_open(&self, port: u16) -> bool {
+            self.0.borrow().contains(&port)
+        }
+    }
+
+    fn dep_def(name: &str, port: Option<u16>, deps: &[&str], timeout: u64) -> (ServiceDef, PathBuf) {
+        let (mut d, p) = def(name);
+        d.port = port;
+        d.depends_on = deps.iter().map(|s| s.to_string()).collect();
+        d.ready_timeout = timeout;
+        (d, p)
+    }
+
+    fn states(e: &Engine) -> Vec<(String, String)> {
+        e.snapshot().into_iter().map(|s| (s.name, s.state)).collect()
+    }
+
+    #[test]
+    fn dependent_waits_for_the_port_then_starts() {
+        let mut r = rig(Mode::Graceful);
+        let probe = FakeProbe(RefCell::new(vec![]));
+        let defs = vec![dep_def("api", None, &["db"], 30), dep_def("db", Some(5432), &[], 30)];
+        let mut e = Engine::new(defs, vec![], &mut r.sp, &*r.clock).with_prober(&probe);
+        e.start_all();
+        assert_eq!(r.log.borrow().spawns.len(), 1); // only db
+        assert_eq!(states(&e), vec![("api".into(), STATE_WAITING.into()), ("db".into(), STATE_RUNNING.into())]);
+        assert_eq!(e.snapshot()[0].error.as_deref(), Some("waiting for db"));
+        run_for(&mut e, &r.clock, 5_000);
+        assert_eq!(r.log.borrow().spawns.len(), 1, "api started before the port opened");
+        probe.0.borrow_mut().push(5432);
+        let t_open = r.clock.now_ms();
+        run_for(&mut e, &r.clock, 1_000);
+        let spawns = r.log.borrow().spawns.clone();
+        assert_eq!(spawns.len(), 2);
+        assert!(spawns[1] >= t_open && spawns[1] <= t_open + POLL_MS, "{spawns:?}");
+        assert!(e.snapshot().iter().all(|s| s.state == STATE_RUNNING && s.error.is_none()));
+    }
+
+    #[test]
+    fn service_without_a_port_is_ready_when_running() {
+        let mut r = rig(Mode::Graceful);
+        let defs = vec![dep_def("c", None, &["b"], 30), dep_def("b", None, &["a"], 30), dep_def("a", None, &[], 30)];
+        let mut e = Engine::new(defs, vec![], &mut r.sp, &*r.clock);
+        e.start_all();
+        // the whole chain starts in one pass, dependencies first (pids follow the start order)
+        assert!(e.snapshot().iter().all(|s| s.state == STATE_RUNNING));
+        let pid = |n: &str| e.snapshot().into_iter().find(|s| s.name == n).unwrap().pid.unwrap();
+        assert!(pid("a") < pid("b") && pid("b") < pid("c"));
+    }
+
+    #[test]
+    fn timeout_blocks_dependents_and_keeps_the_dependency_running() {
+        let mut r = rig(Mode::Graceful);
+        let probe = FakeProbe(RefCell::new(vec![]));
+        let defs = vec![
+            dep_def("db", Some(5432), &[], 3),
+            dep_def("api", None, &["db"], 30),
+            dep_def("web", None, &["api"], 30),
+            dep_def("solo", None, &[], 30),
+        ];
+        let mut e = Engine::new(defs, vec![], &mut r.sp, &*r.clock).with_prober(&probe);
+        e.start_all();
+        run_for(&mut e, &r.clock, 2_000);
+        assert_eq!(e.snapshot()[1].state, STATE_WAITING);
+        run_for(&mut e, &r.clock, 2_000);
+        let st = e.snapshot();
+        assert_eq!(st[0].state, STATE_RUNNING);
+        assert_eq!(st[1].state, STATE_BLOCKED);
+        assert_eq!(st[2].state, STATE_BLOCKED);
+        assert_eq!(st[3].state, STATE_RUNNING);
+        let msg = st[1].error.clone().unwrap();
+        assert!(msg.contains("service db is not ready after 3 s") && msg.contains("5432"), "{msg}");
+        assert!(st[2].error.clone().unwrap().contains("api"));
+        assert_eq!(r.log.borrow().spawns.len(), 2); // db and solo only
+        // a late port does not start blocked services
+        probe.0.borrow_mut().push(5432);
+        run_for(&mut e, &r.clock, 2_000);
+        assert_eq!(e.snapshot()[1].state, STATE_BLOCKED);
+        assert!(!e.all_done()); // db and solo still run
+    }
+
+    #[test]
+    fn failed_dependency_blocks_at_once() {
+        let mut r = rig(Mode::ExitAfter(0, 1));
+        let probe = FakeProbe(RefCell::new(vec![]));
+        let defs = vec![dep_def("db", Some(5432), &[], 600), dep_def("api", None, &["db"], 30)];
+        let mut e = Engine::new(defs, vec![], &mut r.sp, &*r.clock).with_prober(&probe);
+        e.start_all();
+        run_for(&mut e, &r.clock, 120_000);
+        let st = e.snapshot();
+        assert_eq!(st[0].state, STATE_FAILED);
+        assert_eq!(st[1].state, STATE_BLOCKED);
+        assert!(st[1].error.clone().unwrap().contains("dependency db is failed"));
+        assert!(e.all_done());
+    }
+
+    #[test]
+    fn restart_policy_is_unchanged_with_dependencies() {
+        let mut r = rig(Mode::ExitAfter(0, 1));
+        let defs = vec![dep_def("web", None, &[], 30)];
+        let mut e = Engine::new(defs, vec![], &mut r.sp, &*r.clock);
+        e.start_all();
+        run_for(&mut e, &r.clock, 120_000);
+        assert_eq!(r.log.borrow().spawns.len(), 6);
+        assert_eq!(e.snapshot()[0].state, STATE_FAILED);
+    }
+
+    #[test]
+    fn readiness_rule_and_loopback_probe() {
+        let p = FakeProbe(RefCell::new(vec![80]));
+        assert!(is_ready(Some(80), false, &p));
+        assert!(!is_ready(Some(81), true, &p));
+        assert!(is_ready(None, true, &p));
+        assert!(!is_ready(None, false, &p));
+        // the real probe: a listener on 127.0.0.1 answers, a closed port does not
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = l.local_addr().unwrap().port();
+        assert!(TcpProber.port_open(port));
+        drop(l);
+        assert!(!TcpProber.port_open(port));
+    }
+
+    #[test]
+    fn services_json_dependencies_are_validated() {
+        let ok = r#"[{"name":"api","cmd":"x","depends_on":["db"],"ready_timeout":5},{"name":"db","cmd":"y"}]"#;
+        let v = parse_services(ok).unwrap();
+        assert_eq!((v[0].depends_on.clone(), v[0].ready_timeout, v[1].ready_timeout), (vec!["db".to_string()], 5, 30));
+        let e = parse_services(r#"[{"name":"a","cmd":"x","depends_on":["zz"]}]"#).unwrap_err();
+        assert!(e.contains("unknown service") && e.contains("zz"), "{e}");
+        let e = parse_services(r#"[{"name":"a","cmd":"x","depends_on":["a"]}]"#).unwrap_err();
+        assert!(e.contains("itself"), "{e}");
+        let e = parse_services(r#"[{"name":"a","cmd":"x","depends_on":["b"]},{"name":"b","cmd":"x","depends_on":["a"]}]"#)
+            .unwrap_err();
+        assert!(e.contains("cycle: a -> b -> a"), "{e}");
+        assert!(parse_services(r#"[{"name":"a","cmd":"x","ready_timeout":0}]"#).is_err());
     }
 
     // ---- log rotation

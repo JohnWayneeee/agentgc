@@ -78,28 +78,78 @@ fn route_or_port(env: &[(String, String)], s: &SvcState) -> String {
     }
 }
 
+/// Does the recorded pid still belong to the recorded process (pid + start time + name)? Read-only.
+pub fn service_running(s: &SvcState) -> bool {
+    s.pid.map_or(false, |p| SysKiller.read(p).map_or(false, |l| check_identity(&l, s.start_time, &s.proc_name).is_ok()))
+}
+
+/// `(running, total)` services of a worktree from `.agentgc/daemon.json`. Read-only: no lock, no write.
+/// `total` is the number of declared services; without a state file nothing runs.
+pub fn service_counts(wt: &Path, declared: usize) -> (usize, usize) {
+    let running = read_state(wt).map_or(0, |st| st.services.iter().filter(|s| service_running(s)).count());
+    (running, declared)
+}
+
+/// READY column: `-` when the service does not run, else `yes` or `no` (see `is_ready`).
+fn ready_cell(s: &SvcState, running: bool) -> &'static str {
+    if !running {
+        "-"
+    } else if is_ready(s.port, true, &TcpProber) {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
 fn print_services(wt: &Path, st: &DaemonState, supervisor_up: bool) {
     let env = load_env(wt);
-    outln!("  {:<14} {:>7}  {:<9}  {:<7}  {:>8}  {:>5}  URL", "SERVICE", "PID", "STATE", "RUNNING", "RESTARTS", "PORT");
+    outln!(
+        "  {:<14} {:>7}  {:<9}  {:<7}  {:<5}  {:>8}  {:>5}  URL",
+        "SERVICE", "PID", "STATE", "RUNNING", "READY", "RESTARTS", "PORT"
+    );
     for s in &st.services {
-        let running = supervisor_up
-            && s.pid.map_or(false, |p| {
-                SysKiller.read(p).map_or(false, |l| check_identity(&l, s.start_time, &s.proc_name).is_ok())
-            });
+        let running = supervisor_up && service_running(s);
         outln!(
-            "  {:<14} {:>7}  {:<9}  {:<7}  {:>8}  {:>5}  {}",
+            "  {:<14} {:>7}  {:<9}  {:<7}  {:<5}  {:>8}  {:>5}  {}",
             s.name,
             s.pid.map_or("-".to_string(), |p| p.to_string()),
             s.state,
             if running { "yes" } else { "no" },
+            ready_cell(s, running),
             s.restarts,
             s.port.map_or("-".to_string(), |p| p.to_string()),
             route_or_port(&env, s)
         );
     }
+    for s in &st.services {
+        if s.state == STATE_WAITING || s.state == STATE_BLOCKED {
+            if let Some(e) = &s.error {
+                outln!("  {}: {e}", s.name);
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ up
+
+/// Wait while services still wait for a dependency. The supervisor decides: it starts them, or blocks
+/// them when a dependency is not ready within its `ready_timeout`. Stops early when the supervisor ends.
+fn wait_ready(wt: &Path, first: DaemonState, defs: &[ServiceDef], sup: &mut std::process::Child) -> DaemonState {
+    let limit_ms: u64 = defs.iter().map(|d| d.ready_timeout * 1000).sum::<u64>() + 10_000;
+    let mut st = first;
+    let mut waited = 0;
+    while st.services.iter().any(|s| s.state == STATE_WAITING) && waited < limit_ms {
+        if matches!(sup.try_wait(), Ok(Some(_))) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+        waited += 200;
+        if let Some(n) = read_state(wt) {
+            st = n;
+        }
+    }
+    st
+}
 
 pub fn cmd_up(t: &Target) -> Result<(), String> {
     let wt = resolve(t)?;
@@ -145,8 +195,18 @@ pub fn cmd_up(t: &Target) -> Result<(), String> {
         if let Some(st) = read_state(&wt) {
             if st.pid == pid {
                 outln!("supervisor started (pid {pid}) for {}", wt.display());
+                let st = wait_ready(&wt, st, &defs, &mut child);
                 print_services(&wt, &st, true);
                 outln!("Logs: {}   Stop: agentgc down", logs_dir(&wt).display());
+                let blocked: Vec<&SvcState> = st.services.iter().filter(|s| s.state == STATE_BLOCKED).collect();
+                if let Some(first) = blocked.first() {
+                    let names: Vec<&str> = blocked.iter().map(|s| s.name.as_str()).collect();
+                    return Err(format!(
+                        "not started: {}. {}. The supervisor keeps running; see `agentgc status`",
+                        names.join(", "),
+                        first.error.as_deref().unwrap_or("a dependency is not ready")
+                    ));
+                }
                 return Ok(());
             }
         }

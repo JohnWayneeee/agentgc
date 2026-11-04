@@ -88,6 +88,8 @@ pub struct ServicePlan {
     pub cmd: String,
     pub cwd: String,
     pub port: Option<u16>,
+    pub depends_on: Vec<String>,
+    pub ready_timeout: u64,
 }
 
 const SERVICES_JSON: &str = ".agentgc/services.json";
@@ -268,7 +270,14 @@ pub fn build_plan(
                 return Err(format!("services.{s}.cmd must render to one non-empty line"));
             }
             let port = sc.port.as_ref().and_then(|pn| ports.iter().find(|(n, _)| n == pn).map(|(_, p)| *p));
-            services.push(ServicePlan { name: s.clone(), cmd, cwd: sc.cwd.clone(), port });
+            services.push(ServicePlan {
+                name: s.clone(),
+                cmd,
+                cwd: sc.cwd.clone(),
+                port,
+                depends_on: sc.depends_on.clone(),
+                ready_timeout: sc.ready_timeout,
+            });
         }
     }
     tc::render_env(&env)?; // checks line breaks early
@@ -409,6 +418,9 @@ fn print_services(p: &Plan) {
     for s in &p.services {
         outln!("  service:  {}  (cwd: {})  [printed only, agentgc never starts it]", s.name, s.cwd);
         outln!("            {}", s.cmd);
+        if !s.depends_on.is_empty() {
+            outln!("            depends on: {} (ready timeout {} s)", s.depends_on.join(" "), s.ready_timeout);
+        }
     }
 }
 
@@ -587,7 +599,10 @@ fn write_services(p: &Plan) -> Result<(), String> {
     let json: Vec<serde_json::Value> = p
         .services
         .iter()
-        .map(|s| serde_json::json!({ "name": s.name, "cmd": s.cmd, "cwd": s.cwd, "port": s.port }))
+        .map(|s| serde_json::json!({
+                "name": s.name, "cmd": s.cmd, "cwd": s.cwd, "port": s.port,
+                "depends_on": s.depends_on, "ready_timeout": s.ready_timeout
+            }))
         .collect();
     let sh: String = p.services.iter().map(|s| format!("{}\n", compose::sh_line(&s.cwd, &s.cmd))).collect();
     let ps: String = p.services.iter().map(|s| format!("{}\n", compose::ps_line(&s.cwd, &s.cmd))).collect();
@@ -634,22 +649,58 @@ pub struct Row {
     pub age_days: u64,
     /// `ok`, `missing`, `dirty` or `unknown`; may hold `dirty` next to `ok`.
     pub status: Vec<String>,
+    /// Uncommitted files (lines of `git status --porcelain`). `null`: folder missing or git failed.
+    pub changed: Option<u64>,
+    /// Commits on the task branch that the base branch lacks. `null`: folder missing or git failed.
+    pub ahead: Option<u64>,
+    /// Commits on the base branch that the task branch lacks. `null`: folder missing or git failed.
+    pub behind: Option<u64>,
+    /// Services with a live recorded process (pid + start time + name), from `.agentgc/daemon.json`.
+    pub services_running: u64,
+    /// Services declared for the task.
+    pub services_total: u64,
 }
 
-fn status_of(path: &Path) -> Vec<String> {
-    if !path.is_dir() || !path.join(".git").exists() {
-        return vec!["missing".into()];
+impl Row {
+    fn missing(&self) -> bool {
+        self.status.iter().any(|s| s == "missing")
     }
-    match git(path, &["status", "--porcelain"]) {
+}
+
+/// Read-only probe of one worktree: status words and the number of uncommitted files.
+/// `--no-optional-locks` keeps `git status` from refreshing the index.
+fn status_of(path: &Path) -> (Vec<String>, Option<u64>) {
+    if !path.is_dir() || !path.join(".git").exists() {
+        return (vec!["missing".into()], None);
+    }
+    match git(path, &["--no-optional-locks", "status", "--porcelain"]) {
         Ok(o) if o.status.success() => {
-            if o.stdout.iter().any(|b| !b.is_ascii_whitespace()) {
-                vec!["ok".into(), "dirty".into()]
+            let n = String::from_utf8_lossy(&o.stdout).lines().filter(|l| !l.trim().is_empty()).count() as u64;
+            if n > 0 {
+                (vec!["ok".into(), "dirty".into()], Some(n))
             } else {
-                vec!["ok".into()]
+                (vec!["ok".into()], Some(0))
             }
         }
-        _ => vec!["ok".into(), "unknown".into()],
+        _ => (vec!["ok".into(), "unknown".into()], None),
     }
+}
+
+/// `(ahead, behind)` of the task branch against its base, from `git rev-list --left-right --count`.
+fn ahead_behind(path: &Path, branch: &str, base: &str) -> Option<(u64, u64)> {
+    let range = format!("refs/heads/{branch}...{base}");
+    let o = git(path, &["rev-list", "--left-right", "--count", &range, "--"]).ok()?;
+    if !o.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&o.stdout);
+    let mut it = text.split_whitespace();
+    let a = it.next()?.parse().ok()?;
+    let b = it.next()?.parse().ok()?;
+    if it.next().is_some() {
+        return None;
+    }
+    Some((a, b))
 }
 
 pub fn collect_rows(root: &Path) -> Vec<Row> {
@@ -657,11 +708,54 @@ pub fn collect_rows(root: &Path) -> Vec<Row> {
     read_registry(root)
         .into_iter()
         .map(|e| {
-            let status = status_of(Path::new(&e.path));
+            let path = Path::new(&e.path);
+            let (status, changed) = status_of(path);
+            let ab = if status.iter().any(|s| s == "missing") { None } else { ahead_behind(path, &e.branch, &e.base) };
             let age_days = now.saturating_sub(e.created_at) / 86400;
-            Row { entry: e, age_days, status }
+            let (running, total) = if status.iter().any(|s| s == "missing") {
+                (0, e.services.len())
+            } else {
+                crate::sup_cmd::service_counts(path, e.services.len())
+            };
+            Row {
+                entry: e,
+                age_days,
+                status,
+                changed,
+                ahead: ab.map(|x| x.0),
+                behind: ab.map(|x| x.1),
+                services_running: running as u64,
+                services_total: total as u64,
+            }
         })
         .collect()
+}
+
+fn cell(missing: bool, v: Option<u64>) -> String {
+    match (missing, v) {
+        (true, _) => "-".into(),
+        (false, Some(n)) => n.to_string(),
+        (false, None) => "?".into(),
+    }
+}
+
+/// The `state:` line of `task list`: CHANGED, AHEAD/BEHIND, SERVICES.
+fn state_line(r: &Row) -> String {
+    let m = r.missing();
+    let ab = if m {
+        "-".to_string()
+    } else {
+        match (r.ahead, r.behind) {
+            (Some(a), Some(b)) => format!("{a}/{b}"),
+            _ => "?".into(),
+        }
+    };
+    let svc = if m || r.services_total == 0 {
+        "-".to_string()
+    } else {
+        format!("{}/{}", r.services_running, r.services_total)
+    };
+    format!("CHANGED {}  AHEAD/BEHIND {}  SERVICES {}", cell(m, r.changed), ab, svc)
 }
 
 pub fn cmd_list(repo: Option<PathBuf>, json: bool) -> Result<(), String> {
@@ -685,7 +779,8 @@ pub fn cmd_list(repo: Option<PathBuf>, json: bool) -> Result<(), String> {
         let ports: Vec<String> = e.ports.iter().map(|(n, p)| format!("{n}={p}")).collect();
         let routes: Vec<String> = e.routes.iter().map(|(n, h)| format!("{n}={h}")).collect();
         outln!(
-            "{}  [{}]  {}d\n    path:   {}\n    branch: {}\n    ports:  {}\n    db:     {}\n    routes: {}\n    services: {}",
+            "{}  [{}]  {}d\n    path:   {}\n    branch: {}\n    ports:  {}\n    db:     {}\n    routes: {}\n    services: {}
+    state:  {}",
             e.name,
             status.join(","),
             r.age_days,
@@ -694,7 +789,8 @@ pub fn cmd_list(repo: Option<PathBuf>, json: bool) -> Result<(), String> {
             if ports.is_empty() { "-".into() } else { ports.join(" ") },
             e.db,
             if routes.is_empty() { "-".into() } else { routes.join(" ") },
-            if e.services.is_empty() { "-".into() } else { e.services.join(" ") }
+            if e.services.is_empty() { "-".into() } else { e.services.join(" ") },
+            state_line(r)
         );
     }
     outln!("{} tasks. Nothing was changed.", rows.len());
