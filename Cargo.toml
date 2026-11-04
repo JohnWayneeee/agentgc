@@ -1,6 +1,6 @@
 [package]
 name = "agentgc"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 description = "Scanner for disk junk left by CLI coding agents and dev tools, with a guarded one-by-one clean"
 

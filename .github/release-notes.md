@@ -2,6 +2,10 @@ agentgc gives each AI coding agent task its own environment: a git worktree, fre
 
 agentgc does not start AI agents. It prepares and cleans the environment around them.
 
+## What is new in 0.3.1
+
+- Agent rules that `agentgc init` writes (the `AGENTS.md` block, the `CLAUDE.md` block and the Claude Code skill) now cover `task review`, `doctor`, the Claude Code hooks (ask by default, `--allow` opt-in) and `run --min-interval`. 0.3.0 shipped the older rules text.
+
 ## What is new in 0.3.0
 
 - `agentgc task review NAME` shows what a task changed before you finish it. It only reads.
