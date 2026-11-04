@@ -671,7 +671,7 @@ pub struct Row {
 }
 
 impl Row {
-    fn missing(&self) -> bool {
+    pub(crate) fn missing(&self) -> bool {
         self.status.iter().any(|s| s == "missing")
     }
 }
@@ -696,7 +696,7 @@ fn status_of(path: &Path) -> (Vec<String>, Option<u64>) {
 }
 
 /// `(ahead, behind)` of the task branch against its base, from `git rev-list --left-right --count`.
-fn ahead_behind(path: &Path, branch: &str, base: &str) -> Option<(u64, u64)> {
+pub(crate) fn ahead_behind(path: &Path, branch: &str, base: &str) -> Option<(u64, u64)> {
     let range = format!("refs/heads/{branch}...{base}");
     let o = git(path, &["rev-list", "--left-right", "--count", &range, "--"]).ok()?;
     if !o.status.success() {
@@ -713,31 +713,31 @@ fn ahead_behind(path: &Path, branch: &str, base: &str) -> Option<(u64, u64)> {
 }
 
 pub fn collect_rows(root: &Path) -> Vec<Row> {
+    read_registry(root).into_iter().map(row_for).collect()
+}
+
+/// Read-only probe of one registry entry.
+pub(crate) fn row_for(e: Entry) -> Row {
     let now = now_secs();
-    read_registry(root)
-        .into_iter()
-        .map(|e| {
-            let path = Path::new(&e.path);
-            let (status, changed) = status_of(path);
-            let ab = if status.iter().any(|s| s == "missing") { None } else { ahead_behind(path, &e.branch, &e.base) };
-            let age_days = now.saturating_sub(e.created_at) / 86400;
-            let (running, total) = if status.iter().any(|s| s == "missing") {
-                (0, e.services.len())
-            } else {
-                crate::sup_cmd::service_counts(path, e.services.len())
-            };
-            Row {
-                entry: e,
-                age_days,
-                status,
-                changed,
-                ahead: ab.map(|x| x.0),
-                behind: ab.map(|x| x.1),
-                services_running: running as u64,
-                services_total: total as u64,
-            }
-        })
-        .collect()
+    let path = Path::new(&e.path);
+    let (status, changed) = status_of(path);
+    let ab = if status.iter().any(|s| s == "missing") { None } else { ahead_behind(path, &e.branch, &e.base) };
+    let age_days = now.saturating_sub(e.created_at) / 86400;
+    let (running, total) = if status.iter().any(|s| s == "missing") {
+        (0, e.services.len())
+    } else {
+        crate::sup_cmd::service_counts(path, e.services.len())
+    };
+    Row {
+        entry: e,
+        age_days,
+        status,
+        changed,
+        ahead: ab.map(|x| x.0),
+        behind: ab.map(|x| x.1),
+        services_running: running as u64,
+        services_total: total as u64,
+    }
 }
 
 fn cell(missing: bool, v: Option<u64>) -> String {
@@ -749,7 +749,7 @@ fn cell(missing: bool, v: Option<u64>) -> String {
 }
 
 /// The `state:` line of `task list`: CHANGED, AHEAD/BEHIND, SERVICES.
-fn state_line(r: &Row) -> String {
+pub(crate) fn state_line(r: &Row) -> String {
     let m = r.missing();
     let ab = if m {
         "-".to_string()

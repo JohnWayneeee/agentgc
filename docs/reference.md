@@ -169,6 +169,7 @@ Tests use a fake and never signal a real process.
 ```
 agentgc task new NAME [--repo PATH] [--config FILE] [--run-setup] [--yes]
 agentgc task list [--repo PATH] [--json]
+agentgc task review NAME [--repo PATH] [--json]
 agentgc task done NAME [--repo PATH] [--config FILE] [--yes] [--kill-procs] [--force] [--stop-services]
 ```
 
@@ -237,7 +238,17 @@ When the worktree folder is missing, all three show `-`. When git fails for one 
 command still succeeds. `--json` has the same values as `changed`, `ahead`, `behind` (`null` for `-` and `?`),
 `services_running` and `services_total`. The state is read-only: no lock, no file write, no index refresh.
 
-`task new` and `task list` never delete anything. Printing never panics on a closed stdout (`| head`).
+`task review NAME` is a short read-only summary of one task for the human reviewer. It prints: state and status, the
+branch and its base, ahead/behind, uncommitted files, the diff against the base (committed work: files, `+insertions`
+`-deletions`, per-file numstat, first 20 files in text) and the last 5 commit subjects (newest first). The diff is
+`git diff --numstat <base>...<branch>`, so it shows what a merge would bring. A last line gives a merge hint: `nothing to
+merge`, `ready to merge` (base has no new commits) or `rebase or merge the base first`. `--json` has `name`, `branch`,
+`base`, `path`, `status`, `state`, `changed`, `ahead`, `behind`, `files_changed`, `insertions`, `deletions`, `files`
+(`path`, `added`, `deleted`; `null` for binary), `commits` (`hash`, `subject`) and `merge_hint`. Git values are `null`
+(`?` in text) when the folder is missing or git fails. An unknown NAME is an error. It runs only `git diff`, `git log`,
+`git rev-list` and `git status`; it writes nothing.
+
+`task new`, `task list` and `task review` never delete anything. Printing never panics on a closed stdout (`| head`).
 
 ### Compose file per task (`[compose]`, `[routes]`)
 

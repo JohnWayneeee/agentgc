@@ -15,6 +15,7 @@ mod sup_cmd;
 mod sup_run;
 mod task;
 mod task_done;
+mod task_review;
 mod task_config;
 mod worktrees;
 
@@ -226,6 +227,16 @@ enum TaskCmd {
         #[arg(long)]
         stop_services: bool,
     },
+    /// Short read-only summary of one task for the human reviewer: files, diffstat, ahead/behind, last commits.
+    Review {
+        /// Task name, as given to `task new`.
+        name: String,
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// List registered tasks with status (ok, missing, dirty). Read-only.
     List {
         #[arg(long)]
@@ -275,6 +286,7 @@ fn run() -> Result<(), String> {
             TaskCmd::Done { name, repo, config, yes, kill_procs, force, stop_services } => {
                 task_done::cmd_done(&task_done::DoneArgs { name, repo, config, yes, kill_procs, force, stop_services })
             }
+            TaskCmd::Review { name, repo, json } => task_review::cmd_review(&name, repo, json),
             TaskCmd::List { repo, json } => task::cmd_list(repo, json),
         },
         Cmd::Ps { proc_rules, json, min_mb, all, root, stop, yes, pid, task, force } => {

@@ -124,6 +124,7 @@ agentgc task new feat-login --yes    # worktree, ports, env file, services
 agentgc up --task feat-login         # start the services
 agentgc status --task feat-login     # pid, state, ready and URL per service
 agentgc task list                    # changed files, ahead/behind, services per task
+agentgc task review feat-login       # diffstat, ahead/behind, last commits for the human reviewer
 agentgc down --task feat-login       # stop the services
 agentgc task done feat-login --yes   # remove the task (refuses unsaved work)
 ```
