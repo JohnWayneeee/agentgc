@@ -225,7 +225,7 @@ impl Spawner for RealSpawner {
         if let Ok(mut l) = log.lock() {
             let _ = l.write(format!("[agentgc] started pid {pid}\n").as_bytes());
         }
-        let (start, name) = SysKiller.read(pid).map(|l| (l.start_time, l.name)).unwrap_or((0, String::new()));
+        let (start, name) = read_settled(pid);
         Ok(Box::new(RealChild {
             child,
             pid,
@@ -235,6 +235,30 @@ impl Spawner for RealSpawner {
             job,
         }))
     }
+}
+
+/// Identity `(start_time, name)` of a just-spawned child. Right after spawn the process may still show
+/// the supervisor's own image (macOS: fork/exec window), and its name changes at exec. A name recorded
+/// then never matches later, and the service would look dead. So wait (up to 1 s) until the name
+/// differs from the supervisor's own name and stays the same on two reads. A child that really
+/// has the same name as the supervisor settles after the wait.
+fn read_settled(pid: u32) -> (u64, String) {
+    let own = SysKiller.read(std::process::id()).map(|l| l.name).unwrap_or_default();
+    let mut last: Option<(u64, String)> = None;
+    for _ in 0..50 {
+        match SysKiller.read(pid) {
+            Some(l) => {
+                let cur = (l.start_time, l.name);
+                if cur.1 != own && last.as_ref() == Some(&cur) {
+                    return cur;
+                }
+                last = Some(cur);
+            }
+            None => break, // already gone: keep the last read
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    last.unwrap_or((0, String::new()))
 }
 
 fn marker_requests(wt: &Path, names: &[String]) -> Vec<String> {
