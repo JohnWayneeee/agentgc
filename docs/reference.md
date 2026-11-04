@@ -523,6 +523,23 @@ requests inside one command. Keep the real limit in the client (retry and back-o
 Idea credit: [heavy](https://github.com/mokevnin/heavy), a counting semaphore for macOS and Linux. `agentgc run` is
 separate code; it adds Windows and named resources.
 
+## Hard-coded ports and DB names (`doctor`)
+
+```
+agentgc doctor [--repo PATH] [--config FILE]
+```
+
+Read-only. Reads the files that `git ls-files` lists and prints `file:line  port N  text` or `file:line  db NAME  text`
+for each hit, then a count. Nothing is changed.
+
+- **Ports.** A whole number inside `ports.range` of the task config (default 3100-3999) that follows `:` or sits on a
+  line with the word "port". Versions, decimals and longer numbers do not count.
+- **Database names.** The repo folder name, with `-` turned into `_` (the `{repo}` value), as a whole word or as
+  `NAME_suffix`, on a line that mentions a database (`database`, `db_name`, `postgres://`, `createdb`, and similar).
+- **Skipped.** Binary and non-UTF-8 files, files over 1 MB, any path with a `target` or `node_modules` folder, and
+  `agentgc.task.toml`. Untracked files are not read.
+- **Fix.** Read `PORT_*` and `DB_NAME` from `.agentgc/task.env` (see `task`) instead of a fixed value.
+
 ## Install agent rules (`init`)
 
 ```

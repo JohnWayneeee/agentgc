@@ -1,6 +1,7 @@
 mod clean;
 mod compose;
 mod deps;
+mod doctor;
 mod init;
 mod lock;
 mod out;
@@ -149,6 +150,15 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TaskCmd,
     },
+    /// Find hard-coded ports and database names in tracked text files. Read-only.
+    Doctor {
+        /// Repo to check. Default: current directory.
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Config file. Default: agentgc.task.toml in the repo root.
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     /// Queue heavy commands and exclusive resources with advisory file locks. No daemon.
     Run(run::RunArgs),
     /// Start the opt-in supervisor of this task's services (from .agentgc/services.json). No system service.
@@ -273,6 +283,7 @@ fn run() -> Result<(), String> {
             }
             Ok(())
         }
+        Cmd::Doctor { repo, config } => doctor::cmd_doctor(&doctor::DoctorArgs { repo, config }),
         Cmd::Up(t) => sup_cmd::cmd_up(&t),
         Cmd::Down { target, force } => sup_cmd::cmd_down(&target, force),
         Cmd::Status(t) => sup_cmd::cmd_status(&t),
