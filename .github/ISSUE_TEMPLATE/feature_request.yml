@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest a change or a new command
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem you have
+      description: What do you do today, and what goes wrong when several agents run in parallel?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Could it delete files or stop processes?
+      description: If yes, how should it ask first and how can it be undone?

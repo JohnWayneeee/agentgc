@@ -1,0 +1,41 @@
+name: Bug report
+description: Something does not work as the README says
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a security problem (wrong deletion, guard bypass, wrong process stopped, secret shown), do not use this form.
+        Use the Security tab: Report a vulnerability.
+        Remove personal paths, usernames and secrets from everything you paste.
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Windows 11 / Ubuntu 24.04 / macOS 15
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: agentgc version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected and what happened
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Config or rules file (if used)
+      render: toml
