@@ -35,7 +35,11 @@ pub struct ProcInfo {
 #[derive(Debug, Deserialize)]
 pub struct KindRule {
     pub name: String,
+    #[serde(default)]
     pub patterns: Vec<String>,
+    /// Substrings matched on the normalized full command line (lowercase, forward slashes).
+    #[serde(default)]
+    pub path_contains: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,11 +54,70 @@ pub fn parse_proc_rules(text: &str) -> Result<Vec<KindRule>, String> {
         .map_err(|e| format!("invalid process rules: {e}"))
 }
 
-/// First kind (file order) with a pattern found in name + command line. Else `other`.
+const KNOWN_EXTS: [&str; 7] = [".exe", ".cmd", ".bat", ".ps1", ".js", ".mjs", ".cjs"];
+
+/// Match form of a name or token: last path component, lowercase, without a known extension.
+fn token_form(t: &str) -> String {
+    let last = t.rsplit(|c| c == '/' || c == '\\').next().unwrap_or("").to_lowercase();
+    for e in KNOWN_EXTS {
+        if let Some(stem) = last.strip_suffix(e) {
+            if !stem.is_empty() {
+                return stem.to_string();
+            }
+        }
+    }
+    last
+}
+
+/// Split on whitespace; a double-quoted part stays one token (quotes removed).
+fn split_tokens(cmd: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_q = false;
+    let mut has = false;
+    for c in cmd.chars() {
+        match c {
+            '"' => {
+                in_q = !in_q;
+                has = true;
+            }
+            c if c.is_whitespace() && !in_q => {
+                if has {
+                    out.push(std::mem::take(&mut cur));
+                    has = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has = true;
+            }
+        }
+    }
+    if has {
+        out.push(cur);
+    }
+    out
+}
+
+/// First kind (file order) that matches. Else `other`.
+/// A pattern matches the executable name or consecutive command-line tokens, compared by
+/// file name only (directories in paths never match). `path_contains` is a substring test
+/// on the normalized full command line.
 pub fn classify(rules: &[KindRule], name: &str, cmd: &str) -> String {
-    let hay = format!("{name} {cmd}").to_lowercase();
+    let exe = token_form(name);
+    let mut seq: Vec<String> = vec![exe.clone()];
+    seq.extend(split_tokens(cmd).iter().map(|t| token_form(t)));
+    let full = format!("{name} {cmd}").to_lowercase().replace('\\', "/");
     for r in rules {
-        if r.patterns.iter().any(|p| !p.is_empty() && hay.contains(&p.to_lowercase())) {
+        let by_pattern = r.patterns.iter().any(|p| {
+            let words: Vec<String> = p.split_whitespace().map(|w| w.to_lowercase()).collect();
+            !words.is_empty() && seq.windows(words.len()).any(|w| w == words.as_slice())
+        });
+        let by_path = r.path_contains.iter().any(|p| {
+            let p = p.to_lowercase().replace('\\', "/");
+            !p.is_empty() && full.contains(&p)
+        });
+        if by_pattern || by_path {
             return r.name.clone();
         }
     }
@@ -280,6 +343,50 @@ mod tests {
         assert_eq!(classify(&r, "postgres", ""), "db");
         assert_eq!(classify(&r, "CLAUDE.exe", ""), "agent");
         assert_eq!(classify(&r, "notepad", ""), "other");
+    }
+
+    fn kind_of(name: &str, cmd: &str) -> String {
+        classify(&rules(), name, cmd)
+    }
+
+    #[test]
+    fn directory_names_do_not_match() {
+        assert_eq!(
+            kind_of("node.exe", "node C:/work/project/.claude/mcp/example-mcp/build/index.js"),
+            "other"
+        );
+        assert_eq!(kind_of("node", "node /home/u/projects/tsc-notes/app.js"), "other");
+    }
+
+    #[test]
+    fn agents_by_name_and_path() {
+        assert_eq!(kind_of("claude.exe", ""), "agent");
+        assert_eq!(
+            kind_of(
+                "node.exe",
+                "node C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"
+            ),
+            "agent"
+        );
+        assert_eq!(
+            kind_of("node.exe", "node C:\\Users\\x\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js"),
+            "agent"
+        );
+        assert_eq!(
+            kind_of(
+                "codex.exe",
+                "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.1027.6604.0_x64__2p2nqsd0c76g0\\app\\codex.exe"
+            ),
+            "agent"
+        );
+    }
+
+    #[test]
+    fn token_patterns() {
+        assert_eq!(kind_of("node", "node node_modules/.bin/next dev"), "dev-server");
+        assert_eq!(kind_of("cargo", "cargo test --lib"), "test");
+        assert_eq!(kind_of("go", "go test ./..."), "test");
+        assert_eq!(kind_of("node", "node /srv/next/dev/app.js"), "other");
     }
 
     #[test]

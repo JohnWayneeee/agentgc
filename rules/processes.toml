@@ -1,10 +1,16 @@
-# Process kinds for `agentgc ps`. Plain substrings, matched case-insensitively
-# against "name + command line". The first kind that matches wins, in file order.
-# Anything that matches nothing is `other`.
+# Process kinds for `agentgc ps`, matched case-insensitively. The first kind that matches wins,
+# in file order. Anything that matches nothing is `other`.
+#
+# `patterns`: each is one or more words. It matches the executable name (file stem, no `.exe`)
+# or consecutive command-line tokens (split on whitespace, double quotes respected). A token
+# with a path separator counts by its file name only, so directory names never match.
+# `path_contains` (optional): substrings matched on the full command line, lowercase, with
+# forward slashes. Use it for packages known by their install path.
 
 [[kind]]
 name = "agent"
 patterns = ["claude", "codex", "gemini", "opencode"]
+path_contains = ["@anthropic-ai/claude-code", "@openai/codex", "@google/gemini-cli", "OpenAI.Codex"]
 
 [[kind]]
 name = "dev-server"
