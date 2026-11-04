@@ -59,6 +59,12 @@ member), and does not follow symlinks. When 2 or more members hold dependencies,
 dependencies, X in total; a shared store (for example pnpm) can cut this. With `--json` the same data (`path` and
 `bytes` per folder) is under `deps`. Read-only.
 
+Shared store estimate: per repo, `agentgc` also walks the `node_modules` folders and counts files with the same
+folder, relative path and size in 2 or more members once. It prints `shared store estimate: X of Y` (X = what a
+pnpm-style store with hard links could save, Y = all `node_modules` bytes). In `--json`: `shareable_bytes` and
+`savings_bytes` per repo. It is a rough number: no content hash, and only `node_modules` counts (not `target`,
+`.venv`, `.next`). It creates no links and deletes nothing.
+
 ## Delete junk one item at a time (`clean`)
 
 ```

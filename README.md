@@ -158,7 +158,7 @@ supervisor started (pid 27980)
 | Command | What it does |
 |---|---|
 | `agentgc scan` | Lists junk: package caches, downloaded browser builds, agent sessions, temp files. Read-only. |
-| `agentgc worktrees` | Finds orphan worktrees and duplicate dependency folders. Read-only. |
+| `agentgc worktrees` | Finds orphan worktrees and duplicate dependency folders; with `--deps` also estimates how much disk a shared store (pnpm) would save. Read-only. |
 | `agentgc clean` | Deletes listed junk one item at a time, with a confirmation for each item. |
 | `agentgc ps` | Shows which processes belong to which task, with their RAM. Read-only. |
 | `agentgc ps --stop` | Stops idle dev servers, language servers, tests and builds. Dry run by default. |

@@ -437,6 +437,13 @@ fn print_deps(d: &[deps::RepoDeps]) {
                 println!("              +{} more", m.deps.len() - 6);
             }
         }
+        if r.savings_bytes > 0 {
+            println!(
+                "  shared store estimate: {} of {} in node_modules could be saved (same path and size in 2+ members; not run)",
+                scan::human(r.savings_bytes),
+                scan::human(r.shareable_bytes)
+            );
+        }
         if r.copies >= 2 {
             println!(
                 "  {} members hold dependencies, {} in total; a shared store (for example pnpm) can cut this",

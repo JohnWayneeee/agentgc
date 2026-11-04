@@ -29,6 +29,11 @@ pub struct RepoDeps {
     pub total_bytes: u64,
     /// Members that hold at least one dependency folder.
     pub copies: usize,
+    /// Bytes in `node_modules` folders (what a pnpm-style store could hold).
+    pub shareable_bytes: u64,
+    /// Estimate of disk a shared store would save: files with the same folder, path and
+    /// size in 2 or more members count once. Not a hash compare, so it is a rough number.
+    pub savings_bytes: u64,
     pub members: Vec<MemberDeps>,
 }
 
@@ -92,6 +97,42 @@ fn member_deps(path: &Path, orphan: bool, dep_depth: usize, others: &HashSet<Str
     MemberDeps { path: path.display().to_string(), orphan, total_bytes, deps }
 }
 
+fn is_shareable(rel: &str) -> bool {
+    rel == "node_modules" || rel.ends_with("/node_modules")
+}
+
+/// Record every file under `dir` as (key, size). Symlinks are not followed.
+fn collect_files(dir: &Path, prefix: &str, out: &mut Vec<(String, u64)>) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let Ok(m) = fs::symlink_metadata(e.path()) else { continue };
+        let rel = format!("{prefix}/{}", e.file_name().to_string_lossy());
+        if m.is_dir() {
+            collect_files(&e.path(), &rel, out);
+        } else if m.is_file() {
+            out.push((rel, m.len()));
+        }
+    }
+}
+
+/// (shareable bytes, estimated savings) for the members of one repo.
+fn shared_estimate(members: &[MemberDeps]) -> (u64, u64) {
+    let mut seen: BTreeMap<(String, u64), u64> = BTreeMap::new();
+    let mut shareable = 0u64;
+    for m in members {
+        for d in m.deps.iter().filter(|d| is_shareable(&d.path)) {
+            shareable += d.bytes;
+            let mut files = Vec::new();
+            collect_files(&Path::new(&m.path).join(&d.path), &d.path, &mut files);
+            for (rel, size) in files {
+                *seen.entry((rel, size)).or_insert(0) += 1;
+            }
+        }
+    }
+    let savings = seen.iter().map(|((_, size), n)| size * (n - 1)).sum();
+    (shareable, savings)
+}
+
 /// Group members by repo. Keep repos with 2 or more members. Biggest first.
 pub fn duplicate_deps(members: &[Member], dep_depth: usize) -> Vec<RepoDeps> {
     let all: HashSet<String> = members.iter().map(|m| key(&m.path)).collect();
@@ -116,8 +157,11 @@ pub fn duplicate_deps(members: &[Member], dep_depth: usize) -> Vec<RepoDeps> {
                 })
                 .collect();
         members.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes).then_with(|| a.path.cmp(&b.path)));
+        let (shareable_bytes, savings_bytes) = shared_estimate(&members);
         out.push(RepoDeps {
             repo,
+            shareable_bytes,
+            savings_bytes,
             member_count: members.len(),
             total_bytes: members.iter().map(|m| m.total_bytes).sum(),
             copies: members.iter().filter(|m| !m.deps.is_empty()).count(),
@@ -219,6 +263,39 @@ mod tests {
         assert_eq!(g[0].total_bytes, 400);
         let main = g[0].members.iter().find(|m| m.path.ends_with("repo")).unwrap();
         assert_eq!(main.total_bytes, 0);
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn estimates_shared_store_savings() {
+        let r = tmp("share");
+        let repo = main_repo(&r);
+        let w = r.join("w1");
+        for base in [&repo, &w] {
+            fs::create_dir_all(base.join("node_modules/p")).unwrap();
+            fs::write(base.join("node_modules/p/same.js"), vec![0u8; 100]).unwrap();
+            fs::create_dir_all(base.join("target")).unwrap();
+            fs::write(base.join("target/t.o"), vec![0u8; 900]).unwrap();
+        }
+        fs::write(repo.join("node_modules/p/diff.js"), vec![0u8; 10]).unwrap();
+        fs::write(w.join("node_modules/p/diff.js"), vec![0u8; 20]).unwrap();
+        let sv = survey(&[r.clone()], 6);
+        let g = duplicate_deps(&sv.members, 3);
+        assert_eq!(g[0].shareable_bytes, 100 + 10 + 100 + 20);
+        assert_eq!(g[0].savings_bytes, 100); // target is not shareable; sizes differ for diff.js
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn no_savings_with_one_copy() {
+        let r = tmp("share1");
+        let repo = main_repo(&r);
+        fs::create_dir_all(repo.join("node_modules")).unwrap();
+        fs::write(repo.join("node_modules/a.js"), vec![0u8; 100]).unwrap();
+        let sv = survey(&[r.clone()], 6);
+        let g = duplicate_deps(&sv.members, 3);
+        assert_eq!(g[0].shareable_bytes, 100);
+        assert_eq!(g[0].savings_bytes, 0);
         let _ = fs::remove_dir_all(&r);
     }
 }
