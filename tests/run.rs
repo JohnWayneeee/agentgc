@@ -33,7 +33,7 @@ fn tmp(tag: &str) -> PathBuf {
 fn agentgc(dir: &PathBuf) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_agentgc"));
     c.arg("run").arg("--dir").arg(dir);
-    for k in ["CI", "AGENTGC_HELD", "AGENTGC_SLOTS", "AGENTGC_DIR", "AGENTGC_POOL", "AGENTGC_TIMEOUT", "AGENTGC_ON_TIMEOUT", "AGENTGC_LOG"] {
+    for k in ["CI", "AGENTGC_HELD", "AGENTGC_SLOTS", "AGENTGC_DIR", "AGENTGC_POOL", "AGENTGC_TIMEOUT", "AGENTGC_ON_TIMEOUT", "AGENTGC_LOG", "AGENTGC_MIN_INTERVAL"] {
         c.env_remove(k);
     }
     c
@@ -188,5 +188,36 @@ fn bad_names_are_refused() {
     let o = agentgc(&d).args(["--resource", "Bad Name", "--", "git", "--version"]).output().unwrap();
     assert_ne!(code(&o), 0);
     let o = agentgc(&d).args(["--pool", "a/b", "--", "git", "--version"]).output().unwrap();
+    assert_ne!(code(&o), 0);
+}
+
+#[test]
+fn min_interval_spaces_out_starts() {
+    need_git!();
+    let d = tmp("mi");
+    let o = agentgc(&d).args(["--slots", "1", "--min-interval", "1", "--", "git", "--version"]).output().unwrap();
+    assert_eq!(code(&o), 0);
+    assert!(lock::last_path(&d, "default", "default").exists());
+    let t = std::time::Instant::now();
+    let o = agentgc(&d).args(["--slots", "1", "--min-interval", "1", "--", "git", "--version"]).output().unwrap();
+    assert_eq!(code(&o), 0);
+    assert!(t.elapsed() >= std::time::Duration::from_millis(800), "{:?}", t.elapsed());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("min interval"));
+}
+
+#[test]
+fn min_interval_timeout_exits_75() {
+    need_git!();
+    let d = tmp("mit");
+    let o = agentgc(&d).args(["--slots", "1", "--min-interval", "30", "--", "git", "--version"]).output().unwrap();
+    assert_eq!(code(&o), 0);
+    let o = agentgc(&d).args(["--slots", "1", "--min-interval", "30", "--timeout", "1", "--", "git", "--version"]).output().unwrap();
+    assert_eq!(code(&o), 75);
+}
+
+#[test]
+fn min_interval_rejects_bad_value() {
+    let d = tmp("mib");
+    let o = agentgc(&d).args(["--min-interval", "-1", "--", "git", "--version"]).output().unwrap();
     assert_ne!(code(&o), 0);
 }

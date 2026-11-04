@@ -26,6 +26,32 @@ pub fn info_path(lock: &Path) -> PathBuf {
     lock.with_extension("info")
 }
 
+/// `<dir>/<pool>/<resource>.gate.lock`: short lock that serializes the interval check of one resource.
+pub fn gate_path(dir: &Path, pool: &str, resource: &str) -> PathBuf {
+    dir.join(pool).join(format!("{resource}.gate.lock"))
+}
+
+/// `<dir>/<pool>/<resource>.last`: unix milliseconds of the last start on the resource.
+pub fn last_path(dir: &Path, pool: &str, resource: &str) -> PathBuf {
+    dir.join(pool).join(format!("{resource}.last"))
+}
+
+pub fn read_last_ms(path: &Path) -> Option<u64> {
+    fs::read_to_string(path).ok()?.trim().parse().ok()
+}
+
+pub fn write_last_ms(path: &Path, ms: u64) {
+    let _ = fs::write(path, ms.to_string());
+}
+
+/// How long to wait so that `interval_ms` passes after `last_ms`. A last start in the future is capped at one interval.
+pub fn remaining_ms(last_ms: Option<u64>, now_ms: u64, interval_ms: u64) -> u64 {
+    match last_ms {
+        None => 0,
+        Some(l) => (l.saturating_add(interval_ms).saturating_sub(now_ms)).min(interval_ms),
+    }
+}
+
 /// Try to take the slot without waiting. `Ok(None)` means somebody holds it.
 /// With `create`, the file and its folder are created when missing.
 pub fn try_acquire(path: &Path, create: bool) -> io::Result<Option<Slot>> {
@@ -67,6 +93,25 @@ mod tests {
         drop(s);
         assert!(!is_held(&p).unwrap());
         assert!(try_acquire(&p, true).unwrap().is_some());
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn remaining_math() {
+        assert_eq!(remaining_ms(None, 1000, 500), 0);
+        assert_eq!(remaining_ms(Some(1000), 1200, 500), 300);
+        assert_eq!(remaining_ms(Some(1000), 1600, 500), 0);
+        assert_eq!(remaining_ms(Some(9_999_999), 1000, 500), 500);
+    }
+
+    #[test]
+    fn last_stamp_roundtrip() {
+        let d = tmp("d");
+        let p = last_path(&d, "p", "r");
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        assert_eq!(read_last_ms(&p), None);
+        write_last_ms(&p, 12345);
+        assert_eq!(read_last_ms(&p), Some(12345));
         let _ = fs::remove_dir_all(&d);
     }
 

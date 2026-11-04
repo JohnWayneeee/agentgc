@@ -69,7 +69,7 @@
 |---|---|
 | **Isolate** | One worktree, free ports, a database name and an env file per task. Optional compose file and `*.localhost` route per task. |
 | **Supervise** | `up`, `down`, `status`, `logs` and `restart` run plain processes per task. Opt-in, no system service, no network port. A service can wait for another one with `depends_on`. |
-| **Queue** | `run` lets heavy commands take turns and guards named exclusive resources, such as one phone or one browser profile. |
+| **Queue** | `run` lets heavy commands take turns and guards named exclusive resources, such as one phone or one browser profile. `--min-interval SECONDS` spaces out starts on a resource, for a shared sandbox API. |
 | **Clean** | `scan` and `clean` remove junk one item at a time. `task done` removes a finished task. `ps --stop` stops idle servers. |
 
 </div>

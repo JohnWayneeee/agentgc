@@ -24,6 +24,10 @@ pub struct RunArgs {
     /// Slots per resource. Default: a quarter of the logical cores, at least 1 (env AGENTGC_SLOTS).
     #[arg(long)]
     pub slots: Option<usize>,
+    /// Wait until at least this many seconds have passed since the last start on each resource (env AGENTGC_MIN_INTERVAL).
+    /// For a rate-limited service. The start time is stored next to the slot files.
+    #[arg(long)]
+    pub min_interval: Option<f64>,
     /// Pool name. Default: "default" (env AGENTGC_POOL).
     #[arg(long)]
     pub pool: Option<String>,
@@ -66,6 +70,7 @@ struct Config {
     dir: PathBuf,
     timeout: Option<Duration>,
     on_timeout: OnTimeout,
+    min_interval: Option<Duration>,
     log: Option<PathBuf>,
 }
 
@@ -176,8 +181,20 @@ fn resolve(a: &RunArgs) -> Result<Config, String> {
         "run" => OnTimeout::Run,
         other => return Err(format!("bad --on-timeout '{other}': use fail or run")),
     };
+    let mi = match (a.min_interval, env_nonempty("AGENTGC_MIN_INTERVAL")) {
+        (Some(n), _) => Some(n),
+        (None, Some(s)) => Some(s.parse::<f64>().map_err(|_| format!("bad AGENTGC_MIN_INTERVAL '{s}'"))?),
+        (None, None) => None,
+    };
+    let min_interval = match mi {
+        Some(n) if !n.is_finite() || !(0.0..=86400.0).contains(&n) => {
+            return Err("--min-interval must be 0..86400 seconds".into())
+        }
+        Some(n) if n > 0.0 => Some(Duration::from_secs_f64(n)),
+        _ => None,
+    };
     let log = a.log.clone().or_else(|| env_nonempty("AGENTGC_LOG").map(PathBuf::from));
-    Ok(Config { resources: sort_resources(resources), slots, pool, dir, timeout, on_timeout, log })
+    Ok(Config { resources: sort_resources(resources), slots, pool, dir, timeout, on_timeout, min_interval, log })
 }
 
 // ---------- queue ----------
@@ -233,6 +250,13 @@ fn acquire_all(cfg: &Config, need: &[String], command: &[String]) -> Result<Acqu
             }
             if let Some((i, p, s)) = got {
                 write_info(&p, command);
+                if let Some(iv) = cfg.min_interval {
+                    if !wait_interval(cfg, r, iv, t0)? {
+                        held.push(Held { lock_path: p, _slot: s });
+                        release(held);
+                        return Ok(Acquired::TimedOut(t0.elapsed()));
+                    }
+                }
                 if announced {
                     eprintln!("agentgc run: got {r} slot {i} after {:.1} s", rt.elapsed().as_secs_f64());
                 }
@@ -253,6 +277,44 @@ fn acquire_all(cfg: &Config, need: &[String], command: &[String]) -> Result<Acqu
         }
     }
     Ok(Acquired::Got(held, t0.elapsed()))
+}
+
+/// Wait until `iv` has passed since the last start on the resource, then stamp the start time now.
+/// A short gate lock makes concurrent waiters start one interval apart. `Ok(false)` means the timeout hit.
+fn wait_interval(cfg: &Config, r: &str, iv: Duration, t0: Instant) -> Result<bool, String> {
+    let gp = lock::gate_path(&cfg.dir, &cfg.pool, r);
+    let lp = lock::last_path(&cfg.dir, &cfg.pool, r);
+    let timed_out = || cfg.timeout.is_some_and(|t| t0.elapsed() >= t);
+    let _gate = loop {
+        if let Some(g) = lock::try_acquire(&gp, true).map_err(|e| format!("lock {}: {e}", gp.display()))? {
+            break g;
+        }
+        if timed_out() {
+            return Ok(false);
+        }
+        std::thread::sleep(POLL);
+    };
+    let mut announced = false;
+    loop {
+        let rem = lock::remaining_ms(lock::read_last_ms(&lp), now_ms(), iv.as_millis() as u64);
+        if rem == 0 {
+            break;
+        }
+        if !announced {
+            eprintln!("agentgc run: waiting up to {:.1} s: min interval of '{r}'", rem as f64 / 1000.0);
+            announced = true;
+        }
+        if timed_out() {
+            return Ok(false);
+        }
+        std::thread::sleep(Duration::from_millis(rem).min(POLL));
+    }
+    lock::write_last_ms(&lp, now_ms());
+    Ok(true)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
 fn write_info(lock_path: &Path, command: &[String]) {

@@ -444,7 +444,7 @@ groups are not signaled as groups; only their recorded pids are.
 ## Queue for heavy commands (`run`)
 
 ```
-agentgc run [--resource NAME]... [--slots N] [--pool NAME] [--dir DIR] [--timeout SECONDS]
+agentgc run [--resource NAME]... [--slots N] [--min-interval SECONDS] [--pool NAME] [--dir DIR] [--timeout SECONDS]
             [--on-timeout fail|run] [--log FILE] [--no-skip-ci] -- COMMAND [ARGS...]
 agentgc run --status [--dir DIR] [--pool NAME] [--json]
 ```
@@ -463,7 +463,7 @@ It also guards an exclusive resource (a phone, a simulator, one browser profile)
 - **Not fair.** Waiters poll every 200 ms. Whoever finds a free slot first gets it. There is no order and no priority.
 - **Defaults.** Dir `<temp dir>/agentgc-run`, pool `default`, resource `default`, slots = a quarter of the logical cores
   (at least 1). Env fallbacks: `AGENTGC_DIR`, `AGENTGC_POOL`, `AGENTGC_SLOTS`, `AGENTGC_TIMEOUT`, `AGENTGC_ON_TIMEOUT`,
-  `AGENTGC_LOG`. Names: lowercase letters, digits, `-`, `_`.
+  `AGENTGC_LOG`, `AGENTGC_MIN_INTERVAL`. Names: lowercase letters, digits, `-`, `_`.
 - **Several resources.** Taken in sorted name order (no deadlock), each with `--slots` slots. All are held while the
   command runs. A named exclusive resource uses `--slots 1`.
 - **Waiting.** When no slot is free, `run` prints once to stderr who holds each slot (pid, how long, command, from the
@@ -471,6 +471,10 @@ It also guards an exclusive resource (a phone, a simulator, one browser profile)
 - **Holder info.** `<resource>.<i>.info` (pid, command, cwd, start) is for display only. The lock is the truth. A stale
   info file of a dead holder blocks nothing. A holder removes only its own `.info`. `run` never deletes a lock or info
   file of another process.
+- **Minimum interval.** `--min-interval SECONDS` (decimals allowed, max 86400) waits until at least that many seconds
+  have passed since the last start on each resource. `run` stores the start time in `<resource>.last` (unix ms) next to
+  the slot files and serializes the check with a short `<resource>.gate.lock`. It starts no daemon. The interval counts
+  from the start of the last command, not from its end. `--timeout` also covers this wait.
 - **Timeout.** `--timeout` stops the waiting. `--on-timeout fail` (default): "gave up waiting", exit 75.
   `--on-timeout run`: runs the command anyway, without slots.
 - **The command.** argv after `--`, no shell, stdio and cwd inherited. Exit code of `agentgc` = exit code of the command;
@@ -482,6 +486,26 @@ It also guards an exclusive resource (a phone, a simulator, one browser profile)
   `waited_ms`, `ran_ms`, `timed_out`, `exit`. Runs that skipped the queue are not logged.
 - **Status.** `--status` lists every pool and resource under the dir with each slot held or free (a non-blocking lock
   attempt, released at once) and the holder's info. `--json` for machines. Read-only: it never stops or kills anything.
+
+### Recipe: a shared sandbox API
+
+Several agents test against one sandbox account of an external API. Give the API a resource name:
+
+```
+agentgc run --resource sandbox-api --slots 1 -- npm run test:integration
+```
+
+This is a concurrency cap, not a rate limit. `--slots 1` lets only one command talk to the API at a time (`--slots 2`
+allows two). It does not count requests per second or per minute. A single command can still exceed the limit.
+For a minimum gap between starts, add `--min-interval`:
+
+```
+agentgc run --resource sandbox-api --slots 1 --min-interval 2 -- npm run test:integration
+```
+
+Every start on `sandbox-api` is at least 2 s after the previous start. That spaces out commands. It still does not cap
+requests inside one command. Keep the real limit in the client (retry and back-off). Use the same `--resource`,
+`--pool` and `--dir` in every agent, or the agents do not share the slot.
 
 `run` queues CPU-heavy work and exclusive devices. Ports and database names are separate: `task` handles them.
 
