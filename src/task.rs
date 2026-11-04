@@ -41,6 +41,12 @@ pub struct Entry {
     /// Route name -> `<name>.<task>.localhost:<port>`.
     #[serde(default)]
     pub routes: BTreeMap<String, String>,
+    /// Files `new` generated, relative to the worktree (services files). `done` removes them.
+    #[serde(default)]
+    pub generated_files: Vec<String>,
+    /// Names of `[services.*]`.
+    #[serde(default)]
+    pub services: Vec<String>,
 }
 
 fn ready_state() -> String {
@@ -72,6 +78,28 @@ pub struct Plan {
     pub compose: Option<ComposePlan>,
     /// Route name and `<name>.<task>.localhost:<port>`.
     pub routes: Vec<(String, String)>,
+    pub services: Vec<ServicePlan>,
+}
+
+/// A service command rendered in memory. agentgc prints it and writes it to files; never runs it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServicePlan {
+    pub name: String,
+    pub cmd: String,
+    pub cwd: String,
+    pub port: Option<u16>,
+}
+
+const SERVICES_JSON: &str = ".agentgc/services.json";
+const SERVICES_SH: &str = ".agentgc/services.sh";
+const SERVICES_PS1: &str = ".agentgc/services.ps1";
+
+fn services_files(services: &[ServicePlan]) -> Vec<String> {
+    if services.is_empty() {
+        Vec::new()
+    } else {
+        vec![SERVICES_JSON.into(), SERVICES_SH.into(), SERVICES_PS1.into()]
+    }
 }
 
 /// Compose file already rendered in memory; written only by `execute`.
@@ -200,6 +228,21 @@ pub fn build_plan(
         tc::put(&mut env, &compose::route_env_key(r), format!("http://{host}"));
         routes.push((r.clone(), host));
     }
+    // A service with a `port` adds a route named like the service, unless [routes] has that name.
+    for (s, sc) in &cfg.services {
+        let Some(port_name) = &sc.port else { continue };
+        if routes.iter().any(|(r, _)| r == s) {
+            continue;
+        }
+        let port = ports
+            .iter()
+            .find(|(n, _)| n == port_name)
+            .map(|(_, p)| *p)
+            .ok_or_else(|| format!("services.{s} points to unknown port {port_name:?}"))?;
+        let host = compose::route_host(s, &name, port);
+        tc::put(&mut env, &compose::route_env_key(s), format!("http://{host}"));
+        routes.push((s.clone(), host));
+    }
     let wt_path = root.join(&cfg.worktree.dir).join(&name);
     let compose_plan = match &cfg.compose {
         None => None,
@@ -211,20 +254,23 @@ pub fn build_plan(
             }
             let tpl = fs::read_to_string(&tpl_path)
                 .map_err(|e| format!("cannot read compose template {}: {e}", tpl_path.display()))?;
-            let mut cv: BTreeMap<String, String> = BTreeMap::new();
-            cv.insert("task".into(), name.clone());
-            cv.insert("db".into(), db.clone());
-            cv.insert("worktree".into(), wt_path.to_string_lossy().into_owned());
-            for (n, p) in &ports {
-                cv.insert(format!("port.{n}"), p.to_string());
-            }
-            for (k, v) in &env {
-                cv.insert(format!("env.{k}"), v.clone());
-            }
-            let rendered = compose::render(&tpl, &cv)?;
+            let cv = placeholder_vars(&name, &db, &wt_path, &ports, &env);
+            let rendered = compose::render(&tpl, &cv).map_err(|e| format!("{e} in the compose template"))?;
             Some(ComposePlan { output: cp.output.clone(), rendered })
         }
     };
+    let mut services: Vec<ServicePlan> = Vec::new();
+    if !cfg.services.is_empty() {
+        let cv = placeholder_vars(&name, &db, &wt_path, &ports, &env);
+        for (s, sc) in &cfg.services {
+            let cmd = compose::render(&sc.cmd, &cv).map_err(|e| format!("services.{s}.cmd: {e}"))?;
+            if cmd.trim().is_empty() || cmd.contains('\n') || cmd.contains('\r') {
+                return Err(format!("services.{s}.cmd must render to one non-empty line"));
+            }
+            let port = sc.port.as_ref().and_then(|pn| ports.iter().find(|(n, _)| n == pn).map(|(_, p)| *p));
+            services.push(ServicePlan { name: s.clone(), cmd, cwd: sc.cwd.clone(), port });
+        }
+    }
     tc::render_env(&env)?; // checks line breaks early
 
     let create = if cfg.db.create.trim().is_empty() {
@@ -254,7 +300,29 @@ pub fn build_plan(
         drop_tpl: cfg.db.drop.clone(),
         compose: compose_plan,
         routes,
+        services,
     })
+}
+
+/// Values for `{{...}}` placeholders: task, db, worktree, port.NAME, env.NAME.
+fn placeholder_vars(
+    task: &str,
+    db: &str,
+    wt: &Path,
+    ports: &[(String, u16)],
+    env: &[(String, String)],
+) -> BTreeMap<String, String> {
+    let mut cv: BTreeMap<String, String> = BTreeMap::new();
+    cv.insert("task".into(), task.to_string());
+    cv.insert("db".into(), db.to_string());
+    cv.insert("worktree".into(), wt.to_string_lossy().into_owned());
+    for (n, p) in ports {
+        cv.insert(format!("port.{n}"), p.to_string());
+    }
+    for (k, v) in env {
+        cv.insert(format!("env.{k}"), v.clone());
+    }
+    cv
 }
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
@@ -310,6 +378,7 @@ fn print_plan(p: &Plan, run_setup: bool, config_note: &str) {
     for (r, h) in &p.routes {
         outln!("  route:    {r} -> {h}");
     }
+    print_services(p);
     outln!(
         "  registry: {}",
         tasks_dir(&p.root).join(format!("{}.json", p.name)).display()
@@ -333,6 +402,13 @@ fn print_plan(p: &Plan, run_setup: bool, config_note: &str) {
     }
     if !p.drop_tpl.trim().is_empty() {
         outln!("  drop: stored for `task done --yes`, never run by `new`");
+    }
+}
+
+fn print_services(p: &Plan) {
+    for s in &p.services {
+        outln!("  service:  {}  (cwd: {})  [printed only, agentgc never starts it]", s.name, s.cwd);
+        outln!("            {}", s.cmd);
     }
 }
 
@@ -426,6 +502,8 @@ pub fn execute(p: &Plan, run_setup: bool) -> Result<(), String> {
         state: "creating".into(),
         compose_file: p.compose.as_ref().map(|c| c.output.clone()).unwrap_or_default(),
         routes: p.routes.iter().cloned().collect(),
+        generated_files: services_files(&p.services),
+        services: p.services.iter().map(|s| s.name.clone()).collect(),
     };
     let reg = tasks_dir(&p.root).join(format!("{}.json", p.name));
     write_new(&reg, &serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?)?;
@@ -481,6 +559,11 @@ fn build(p: &Plan, run_setup: bool, entry: &mut Entry) -> Result<(), String> {
     write_new(&env_path, &tc::render_env(&p.env)?)?;
     outln!("wrote {}", env_path.display());
 
+    if !p.services.is_empty() {
+        write_services(p)?;
+        print_services(p);
+    }
+
     if run_setup {
         let mut all: Vec<&String> = Vec::new();
         if let Some(c) = &p.create {
@@ -495,6 +578,24 @@ fn build(p: &Plan, run_setup: bool, entry: &mut Entry) -> Result<(), String> {
         for c in p.create.iter().chain(p.setup.iter()) {
             outln!("  not run (use --run-setup): {c}");
         }
+    }
+    Ok(())
+}
+
+/// Write services.json, services.sh and services.ps1 with `create_new`. Never runs a command.
+fn write_services(p: &Plan) -> Result<(), String> {
+    let json: Vec<serde_json::Value> = p
+        .services
+        .iter()
+        .map(|s| serde_json::json!({ "name": s.name, "cmd": s.cmd, "cwd": s.cwd, "port": s.port }))
+        .collect();
+    let sh: String = p.services.iter().map(|s| format!("{}\n", compose::sh_line(&s.cwd, &s.cmd))).collect();
+    let ps: String = p.services.iter().map(|s| format!("{}\n", compose::ps_line(&s.cwd, &s.cmd))).collect();
+    let text = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+    for (rel, body) in [(SERVICES_JSON, text), (SERVICES_SH, sh), (SERVICES_PS1, ps)] {
+        let path = p.wt_path.join(rel);
+        write_new(&path, &body)?;
+        outln!("wrote {} (agentgc never starts services)", path.display());
     }
     Ok(())
 }
@@ -584,7 +685,7 @@ pub fn cmd_list(repo: Option<PathBuf>, json: bool) -> Result<(), String> {
         let ports: Vec<String> = e.ports.iter().map(|(n, p)| format!("{n}={p}")).collect();
         let routes: Vec<String> = e.routes.iter().map(|(n, h)| format!("{n}={h}")).collect();
         outln!(
-            "{}  [{}]  {}d\n    path:   {}\n    branch: {}\n    ports:  {}\n    db:     {}\n    routes: {}",
+            "{}  [{}]  {}d\n    path:   {}\n    branch: {}\n    ports:  {}\n    db:     {}\n    routes: {}\n    services: {}",
             e.name,
             status.join(","),
             r.age_days,
@@ -592,7 +693,8 @@ pub fn cmd_list(repo: Option<PathBuf>, json: bool) -> Result<(), String> {
             e.branch,
             if ports.is_empty() { "-".into() } else { ports.join(" ") },
             e.db,
-            if routes.is_empty() { "-".into() } else { routes.join(" ") }
+            if routes.is_empty() { "-".into() } else { routes.join(" ") },
+            if e.services.is_empty() { "-".into() } else { e.services.join(" ") }
         );
     }
     outln!("{} tasks. Nothing was changed.", rows.len());
@@ -681,6 +783,37 @@ mod tests {
         assert_eq!(e.compose_file, "");
         assert!(e.routes.is_empty());
         assert_eq!(e.state, "ready");
+        assert!(e.generated_files.is_empty() && e.services.is_empty());
+    }
+
+    #[test]
+    fn plan_renders_services_and_routes() {
+        let c = cfg(
+            "[ports]\nnames=[\"web\",\"api\"]\n[routes]\napi=\"api\"\n[services.web]\ncmd=\"npm run dev -- --port {{port.web}} --task {{task}}\"\nport=\"web\"\n[services.api]\ncmd=\"cargo run\"\ncwd=\"apps/api\"\nport=\"api\"\n",
+        );
+        let p = build_plan(&c, "demo", Path::new("/tmp/r"), &HashSet::new(), &|_| true).unwrap();
+        assert_eq!(p.services.len(), 2);
+        let api = &p.services[0];
+        assert_eq!((api.name.as_str(), api.cwd.as_str(), api.port), ("api", "apps/api", Some(3101)));
+        let web = &p.services[1];
+        assert_eq!(web.cmd, "npm run dev -- --port 3100 --task demo");
+        assert_eq!(web.cwd, ".");
+        // the service route is added; [routes] keeps its own `api` entry
+        assert!(p.routes.contains(&("web".to_string(), "web.demo.localhost:3100".to_string())));
+        assert_eq!(p.routes.iter().filter(|(r, _)| r == "api").count(), 1);
+        assert!(tc::render_env(&p.env).unwrap().contains("AGENTGC_ROUTE_WEB=http://web.demo.localhost:3100\n"));
+        assert_eq!(services_files(&p.services).len(), 3);
+        assert!(services_files(&[]).is_empty());
+    }
+
+    #[test]
+    fn service_unknown_placeholder_names_it() {
+        let c = cfg("[services.web]\ncmd=\"run {{port.nope}}\"\n");
+        let e = build_plan(&c, "demo", Path::new("/tmp/r"), &HashSet::new(), &|_| true).unwrap_err();
+        assert!(e.contains("{{port.nope}}") && e.contains("services.web"), "{e}");
+        let c = cfg("[services.web]\ncmd=\"{{env.TASK_ID}} {{db}} {{worktree}}\"\n");
+        let p = build_plan(&c, "demo", Path::new("/tmp/r"), &HashSet::new(), &|_| true).unwrap();
+        assert!(p.services[0].cmd.starts_with("demo r_demo "), "{:?}", p.services[0].cmd);
     }
 
     #[test]

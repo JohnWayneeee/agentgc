@@ -231,6 +231,15 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         return Err(format!("registry compose_file {:?} is not a safe relative path; refusing", entry.compose_file));
     };
 
+    // Generated files recorded by `new` (services files). Same rule: safe relative paths only.
+    let mut generated: Vec<String> = Vec::new();
+    for g in &entry.generated_files {
+        if !tc::safe_rel(g) {
+            return Err(format!("registry generated_files entry {g:?} is not a safe relative path; refusing"));
+        }
+        generated.push(g.replace('\\', "/").trim_start_matches("./").to_string());
+    }
+
     let size = if t.exists { scan::dir_size(&t.path) } else { 0 };
     let branch_exists = task::branch_exists(&root, &entry.branch);
     outln!("Finish task {name:?} (state: {}, {note})", entry.state);
@@ -351,6 +360,9 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         outln!("     delete the rendered compose file {c} (one file, only if untracked and inside the worktree)");
         outln!("     hint (never run by agentgc): {}", compose_hint(&name));
     }
+    for g in &generated {
+        outln!("     delete the generated file {g} (only if untracked, a plain file, inside the worktree)");
+    }
     outln!(
         "  d. {}",
         if t.exists {
@@ -389,7 +401,7 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
 
     out::set_critical(true);
     let mut done: Vec<String> = Vec::new();
-    let res = execute(a, &root, &entry, &t, &found, drop_cmd.as_deref(), branch_exists, &reg, compose_rel.as_deref(), &mut done);
+    let res = execute(a, &root, &entry, &t, &found, drop_cmd.as_deref(), branch_exists, &reg, compose_rel.as_deref(), &generated, &mut done);
     if let Err(e) = &res {
         outln!("Stopped at the first failure. Already done:");
         if done.is_empty() {
@@ -407,9 +419,9 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove the one rendered compose file. Never a folder, never a symlink, never a tracked file,
-/// never a path that resolves outside the worktree.
-fn remove_compose_file(wt: &Path, rel: &str, done: &mut Vec<String>) -> Result<(), String> {
+/// Remove one file recorded by `new` (compose file, services files). Never a folder, never a
+/// symlink, never a tracked file, never a path that resolves outside the worktree.
+fn remove_recorded_file(wt: &Path, rel: &str, done: &mut Vec<String>) -> Result<(), String> {
     let p = wt.join(rel);
     match fs::symlink_metadata(&p) {
         Ok(m) if m.is_file() => {}
@@ -450,6 +462,7 @@ fn execute(
     branch_exists: bool,
     reg: &Path,
     compose_rel: Option<&str>,
+    generated: &[String],
     done: &mut Vec<String>,
 ) -> Result<(), String> {
     // a. processes
@@ -490,7 +503,10 @@ fn execute(
     // c. own files only. No recursive delete anywhere.
     if t.exists {
         if let Some(rel) = compose_rel {
-            remove_compose_file(&t.path, rel, done)?;
+            remove_recorded_file(&t.path, rel, done)?;
+        }
+        for rel in generated {
+            remove_recorded_file(&t.path, rel, done)?;
         }
         let ad = t.path.join(".agentgc");
         if fs::symlink_metadata(&ad).map_or(false, |m| m.is_dir()) {

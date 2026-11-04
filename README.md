@@ -262,6 +262,44 @@ example `{{env.PREFIX}}`), `{{worktree}}`. An unknown placeholder is an error th
 - Checks at load time: `output` and `template` are relative paths without `..`; the template file exists; every route
   points to a name in `ports.names`.
 
+### Plain processes per task (`[services]`)
+
+Docker-free setup: each task runs plain processes plus one shared database server. `[services.NAME]` is optional.
+`[db]` already gives every task its own database name inside one server, so `[db]` + `[services]` replace a
+per-task compose stack. agentgc only describes and prints the commands. It never starts, supervises or stops them.
+No daemon.
+
+```toml
+[ports]
+names = ["web", "api"]
+[db]
+create = "createdb {db}"                   # one database per task in the shared server (run with --run-setup)
+[services.web]
+cmd = "npm run dev -- --port {{port.web}}"  # placeholders as in compose: {{task}} {{port.NAME}} {{db}} {{env.NAME}} {{worktree}}
+cwd = "."                                   # relative to the worktree, no '..'; default "."
+port = "web"                                # optional: a name from [ports]; adds the route web.<task>.localhost:<port>
+[services.api]
+cmd = "cargo run -- --port {{port.api}} --db {{db}}"
+cwd = "apps/api"
+port = "api"
+```
+
+- Rendering happens at plan time with the compose renderer. An unknown placeholder is an error that names it, and
+  nothing is written. The rendered command must be one non-empty line.
+- `task new` prints, per service, the ready command and its cwd (also in the dry run). With `--yes` it writes, with
+  `create_new` and never over an existing file: `<worktree>/.agentgc/services.json` (array of `name`, `cmd`, `cwd`,
+  `port` as the allocated number or `null`), `services.sh` (`cd <cwd> && <cmd>`) and `services.ps1`
+  (`Set-Location <cwd>; <cmd>`), one plain line per service, no comments. Run the lines yourself.
+- A service with `port` adds the route `<name>.<task>.localhost:<port>` and `AGENTGC_ROUTE_<NAME>` to
+  `.agentgc/task.env`, like `[routes]`. If `[routes]` already has that name, the `[routes]` entry wins.
+- The registry records the generated files (`generated_files`) and the service names (`services`); old entries
+  without them still load. `task list` shows the service names.
+- `task done --yes` removes only the recorded files, with `remove_file`: each must be a plain file (no symlink),
+  untracked, and inside the worktree. Same checks as for the compose file. `.agentgc/` stays out of the
+  uncommitted-work check.
+- Checks at load time: the service name follows the task name rules, `cmd` is not empty, `cwd` is relative without
+  `..`, `port` is a name in `ports.names`.
+
 ### `task done`
 
 ```

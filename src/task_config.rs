@@ -14,6 +14,25 @@ pub struct Config {
     pub setup: SetupCfg,
     pub compose: Option<ComposeCfg>,
     pub routes: BTreeMap<String, String>,
+    pub services: BTreeMap<String, ServiceCfg>,
+}
+
+/// `[services.NAME]`: a plain process agentgc only describes, never starts.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ServiceCfg {
+    /// Command template (`{{task}}` `{{port.NAME}}` `{{db}}` `{{env.NAME}}` `{{worktree}}`).
+    pub cmd: String,
+    /// Folder relative to the worktree.
+    #[serde(default = "dot")]
+    pub cwd: String,
+    /// Optional name from `[ports]`; adds a route.
+    #[serde(default)]
+    pub port: Option<String>,
+}
+
+fn dot() -> String {
+    ".".into()
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -146,6 +165,20 @@ fn validate(c: &Config) -> Result<(), String> {
         sanitize_name(r).map_err(|e| format!("routes {r:?}: {e}"))?;
         if !c.ports.names.contains(port) {
             return Err(format!("routes.{r} points to port {port:?}, which is not in ports.names"));
+        }
+    }
+    for (n, s) in &c.services {
+        sanitize_name(n).map_err(|e| format!("services {n:?}: {e}"))?;
+        if s.cmd.trim().is_empty() {
+            return Err(format!("services.{n}.cmd is empty"));
+        }
+        if s.cwd != "." && !safe_rel(&s.cwd) {
+            return Err(format!("services.{n}.cwd must be a relative path without '..': {:?}", s.cwd));
+        }
+        if let Some(p) = &s.port {
+            if !c.ports.names.contains(p) {
+                return Err(format!("services.{n}.port points to port {p:?}, which is not in ports.names"));
+            }
         }
     }
     for k in c.env.vars.keys().chain(c.env.dynamic.keys()) {
@@ -415,5 +448,25 @@ mod tests {
         assert!(parse_config("[worktree]\nbase=\"release/1.0\"\nbranch=\"task/{name}\"").is_ok());
         assert_eq!(sanitize_repo_db("My-Repo.x"), "my_repo_x");
         assert!(parse_config("[copy]\nfiles=[\"../.env\"]").is_err());
+    }
+
+    #[test]
+    fn services_validation() {
+        let ok = parse_config("[services.web]\ncmd=\"npm run dev\"\nport=\"web\"\n").unwrap();
+        let s = &ok.services["web"];
+        assert_eq!(s.cwd, ".");
+        assert_eq!(s.port.as_deref(), Some("web"));
+        assert!(parse_config("[services.api]\ncmd=\"x\"\ncwd=\"apps/api\"\n").is_ok());
+        for bad in [
+            "[services.Web]\ncmd=\"x\"\n",
+            "[services.a]\ncmd=\"  \"\n",
+            "[services.a]\n",
+            "[services.a]\ncmd=\"x\"\ncwd=\"../x\"\n",
+            "[services.a]\ncmd=\"x\"\ncwd=\"/abs\"\n",
+            "[services.a]\ncmd=\"x\"\nport=\"nope\"\n",
+            "[services.a]\ncmd=\"x\"\nextra=1\n",
+        ] {
+            assert!(parse_config(bad).is_err(), "{bad}");
+        }
     }
 }

@@ -15,7 +15,7 @@ pub fn render(tpl: &str, vars: &BTreeMap<String, String>) -> Result<String, Stri
                 let key = after[..j].trim();
                 match vars.get(key) {
                     Some(v) => out.push_str(v),
-                    None => return Err(format!("unknown placeholder {{{{{key}}}}} in the compose template")),
+                    None => return Err(format!("unknown placeholder {{{{{key}}}}}")),
                 }
                 rest = &after[j + 2..];
             }
@@ -41,6 +41,38 @@ pub fn route_host(name: &str, task: &str, port: u16) -> String {
 
 pub fn project_name(task: &str) -> String {
     format!("agentgc-{task}")
+}
+
+fn plain_word(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
+}
+
+/// POSIX shell word: plain text stays as it is, anything else gets single quotes.
+pub fn sh_word(s: &str) -> String {
+    if plain_word(s) {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+/// PowerShell word: plain text stays as it is, anything else gets single quotes.
+pub fn ps_word(s: &str) -> String {
+    if plain_word(s) {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "''"))
+    }
+}
+
+/// One line for `services.sh`: `cd <cwd> && <cmd>`. No comments.
+pub fn sh_line(cwd: &str, cmd: &str) -> String {
+    format!("cd {} && {cmd}", sh_word(cwd))
+}
+
+/// One line for `services.ps1`: `Set-Location <cwd>; <cmd>`. No comments.
+pub fn ps_line(cwd: &str, cmd: &str) -> String {
+    format!("Set-Location {}; {cmd}", ps_word(cwd))
 }
 
 #[cfg(test)]
@@ -82,5 +114,14 @@ mod tests {
         assert_eq!(route_env_key("my-web"), "AGENTGC_ROUTE_MY_WEB");
         assert_eq!(route_host("web", "t1", 3100), "web.t1.localhost:3100");
         assert_eq!(project_name("t1"), "agentgc-t1");
+    }
+
+    #[test]
+    fn service_lines() {
+        assert_eq!(sh_line(".", "npm run dev"), "cd . && npm run dev");
+        assert_eq!(ps_line("apps/api", "cargo run"), "Set-Location apps/api; cargo run");
+        assert_eq!(sh_line("my dir", "x"), "cd 'my dir' && x");
+        assert_eq!(ps_line("it's", "x"), "Set-Location 'it''s'; x");
+        assert_eq!(sh_word("it's"), "'it'\\''s'");
     }
 }
