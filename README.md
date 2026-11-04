@@ -47,13 +47,17 @@ The hint is text only. `agentgc` never runs it.
 ### Duplicate dependencies (`--deps`)
 
 ```
-agentgc worktrees --root PATH --deps [--json]
+agentgc worktrees --root PATH --deps [--dep-depth N] [--json]
 ```
 
 Groups worktrees by repo (main checkout included, orphans marked `[orphan]`). For each repo with 2 or more members it
-lists the size of `node_modules`, `.venv`, `vendor/bundle`, `target`, `.next` at each member root, biggest member first,
-and a note: N copies of dependencies; a shared store (for example pnpm) can cut this. With `--json` the same data
-is under `deps`. Read-only.
+prints, per member, the total and the dependency folders found (`node_modules`, `.venv`, `vendor/bundle`, `target`,
+`.next`) with relative path and size, largest first (6 lines, then "+N more"). Folders are searched at the member root
+and in subfolders up to `--dep-depth` (default 3), so monorepos such as `web/node_modules` are found. The search
+does not enter `.git`, found dependency folders or other member roots (nested worktrees count under their own
+member), and does not follow symlinks. When 2 or more members hold dependencies, a note says: N members hold
+dependencies, X in total; a shared store (for example pnpm) can cut this. With `--json` the same data (`path` and
+`bytes` per folder) is under `deps`. Read-only.
 
 ## Rules format
 

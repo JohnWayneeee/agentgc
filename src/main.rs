@@ -43,6 +43,9 @@ enum Cmd {
         /// Also list dependency folders duplicated across worktrees of one repo.
         #[arg(long)]
         deps: bool,
+        /// With --deps: how deep below each member to look for dependency folders.
+        #[arg(long, default_value_t = 3)]
+        dep_depth: usize,
     },
 }
 
@@ -76,14 +79,14 @@ fn run() -> Result<(), String> {
             }
             Ok(())
         }
-        Cmd::Worktrees { mut root, depth, json, deps } => {
+        Cmd::Worktrees { mut root, depth, json, deps, dep_depth } => {
             if root.is_empty() {
                 root.push(PathBuf::from("."));
             }
             let sv = worktrees::survey(&root, depth);
             let found = &sv.orphans;
             let total: u64 = found.iter().map(|o| o.bytes).sum();
-            let dups = if deps { Some(deps::duplicate_deps(&sv.members)) } else { None };
+            let dups = if deps { Some(deps::duplicate_deps(&sv.members, dep_depth)) } else { None };
             if json {
                 let mut v = serde_json::json!({
                     "total_bytes": total,
@@ -151,13 +154,22 @@ fn print_deps(d: &[deps::RepoDeps]) {
     for r in d {
         println!("{}  ({} members, {})", r.repo, r.member_count, scan::human(r.total_bytes));
         for m in &r.members {
-            let parts: Vec<String> =
-                m.deps.iter().map(|x| format!("{} {}", x.dir, scan::human(x.bytes))).collect();
-            let parts = if parts.is_empty() { "-".to_string() } else { parts.join(", ") };
             let tag = if m.orphan { " [orphan]" } else { "" };
-            println!("  {:>10}  {}{}  {}", scan::human(m.total_bytes), m.path, tag, parts);
+            println!("  {:>10}  {}{}", scan::human(m.total_bytes), m.path, tag);
+            for x in m.deps.iter().take(6) {
+                println!("  {:>10}      {}", scan::human(x.bytes), x.path);
+            }
+            if m.deps.len() > 6 {
+                println!("              +{} more", m.deps.len() - 6);
+            }
         }
-        println!("  {} copies of dependencies; a shared store (for example pnpm) can cut this", r.copies);
+        if r.copies >= 2 {
+            println!(
+                "  {} members hold dependencies, {} in total; a shared store (for example pnpm) can cut this",
+                r.copies,
+                scan::human(r.total_bytes)
+            );
+        }
     }
 }
 

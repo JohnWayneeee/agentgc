@@ -1,15 +1,16 @@
 use crate::worktrees::Member;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Dependency folders measured at each member root.
 const DEP_DIRS: [&str; 5] = ["node_modules", ".venv", "vendor/bundle", "target", ".next"];
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct DepSize {
-    pub dir: String,
+    /// Path relative to the member root, with `/`.
+    pub path: String,
     pub bytes: u64,
 }
 
@@ -41,21 +42,59 @@ fn key(p: &Path) -> String {
     }
 }
 
-fn member_deps(path: &Path, orphan: bool) -> MemberDeps {
+/// Folders never entered while looking for dependency folders.
+const WALK_SKIP: [&str; 5] = [".git", "node_modules", ".venv", "target", ".next"];
+
+/// Find dependency folders at the root and in subfolders. A dependency folder sits at
+/// depth <= `dep_depth` (root children are depth 1). Symlinks are not followed.
+/// Other member roots, `.git` and found dependency folders are not entered.
+fn member_deps(path: &Path, orphan: bool, dep_depth: usize, others: &HashSet<String>) -> MemberDeps {
     let mut deps = Vec::new();
-    for d in DEP_DIRS {
-        let p = path.join(d);
-        if fs::symlink_metadata(&p).map_or(false, |m| m.is_dir()) {
-            deps.push(DepSize { dir: d.to_string(), bytes: crate::scan::dir_size(&p) });
+    let mut found: HashSet<PathBuf> = HashSet::new();
+    let mut stack = vec![(path.to_path_buf(), 0usize)];
+    while let Some((dir, level)) = stack.pop() {
+        if level == 0 || level < dep_depth {
+            for d in DEP_DIRS {
+                let p = dir.join(d);
+                if fs::symlink_metadata(&p).map_or(false, |m| m.is_dir()) {
+                    let rel = p
+                        .strip_prefix(path)
+                        .unwrap_or(&p)
+                        .display()
+                        .to_string()
+                        .replace('\\', "/");
+                    deps.push(DepSize { path: rel, bytes: crate::scan::dir_size(&p) });
+                    found.insert(p);
+                }
+            }
+        }
+        if level + 1 >= dep_depth {
+            continue;
+        }
+        let Ok(rd) = fs::read_dir(&dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            let name = e.file_name();
+            if WALK_SKIP.iter().any(|s| name == *s) || found.contains(&p) {
+                continue;
+            }
+            if !fs::symlink_metadata(&p).map_or(false, |m| m.is_dir()) {
+                continue;
+            }
+            if others.contains(&key(&p)) {
+                continue;
+            }
+            stack.push((p, level + 1));
         }
     }
-    deps.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.dir.cmp(&b.dir)));
+    deps.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
     let total_bytes = deps.iter().map(|d| d.bytes).sum();
     MemberDeps { path: path.display().to_string(), orphan, total_bytes, deps }
 }
 
 /// Group members by repo. Keep repos with 2 or more members. Biggest first.
-pub fn duplicate_deps(members: &[Member]) -> Vec<RepoDeps> {
+pub fn duplicate_deps(members: &[Member], dep_depth: usize) -> Vec<RepoDeps> {
+    let all: HashSet<String> = members.iter().map(|m| key(&m.path)).collect();
     let mut groups: BTreeMap<String, (String, BTreeMap<String, &Member>)> = BTreeMap::new();
     for m in members {
         let g = groups
@@ -69,7 +108,13 @@ pub fn duplicate_deps(members: &[Member]) -> Vec<RepoDeps> {
             continue;
         }
         let mut members: Vec<MemberDeps> =
-            ms.values().map(|m| member_deps(&m.path, m.orphan)).collect();
+            ms.values()
+                .map(|m| {
+                    let mut others = all.clone();
+                    others.remove(&key(&m.path));
+                    member_deps(&m.path, m.orphan, dep_depth, &others)
+                })
+                .collect();
         members.sort_by(|a, b| b.total_bytes.cmp(&a.total_bytes).then_with(|| a.path.cmp(&b.path)));
         out.push(RepoDeps {
             repo,
@@ -116,14 +161,64 @@ mod tests {
         // lone repo: 1 member, must not be listed
         fs::create_dir_all(r.join("lone/.git")).unwrap();
         let sv = survey(&[r.clone()], 6);
-        let g = duplicate_deps(&sv.members);
+        let g = duplicate_deps(&sv.members, 3);
         assert_eq!(g.len(), 1);
         assert_eq!(g[0].member_count, 2);
         assert_eq!(g[0].total_bytes, 1350);
         assert_eq!(g[0].copies, 2);
         assert_eq!(g[0].members[0].total_bytes, 1000);
-        assert_eq!(g[0].members[1].deps[0], DepSize { dir: "node_modules".into(), bytes: 300 });
-        assert_eq!(g[0].members[1].deps[1].dir, "target");
+        assert_eq!(g[0].members[1].deps[0], DepSize { path: "node_modules".into(), bytes: 300 });
+        assert_eq!(g[0].members[1].deps[1].path, "target");
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    fn main_repo(r: &Path) -> PathBuf {
+        let repo = r.join("repo");
+        fs::create_dir_all(repo.join(".git/worktrees/w1")).unwrap();
+        let w = r.join("w1");
+        fs::create_dir_all(&w).unwrap();
+        fs::write(w.join(".git"), format!("gitdir: {}\n", repo.join(".git/worktrees/w1").display()))
+            .unwrap();
+        repo
+    }
+
+    #[test]
+    fn finds_subfolder_deps_by_depth() {
+        let r = tmp("depth");
+        let repo = main_repo(&r);
+        fs::create_dir_all(repo.join("app/node_modules")).unwrap();
+        fs::write(repo.join("app/node_modules/a.js"), vec![0u8; 200]).unwrap();
+        fs::create_dir_all(repo.join("a/b/c/node_modules")).unwrap(); // depth 4
+        fs::write(repo.join("a/b/c/node_modules/b.js"), vec![0u8; 500]).unwrap();
+        let sv = survey(&[r.clone()], 6);
+        let g = duplicate_deps(&sv.members, 3);
+        let main = g[0].members.iter().find(|m| m.path.ends_with("repo")).unwrap();
+        assert_eq!(main.deps, vec![DepSize { path: "app/node_modules".into(), bytes: 200 }]);
+        let g4 = duplicate_deps(&sv.members, 4);
+        let main4 = g4[0].members.iter().find(|m| m.path.ends_with("repo")).unwrap();
+        assert_eq!(main4.total_bytes, 700);
+        assert_eq!(main4.deps[0].path, "a/b/c/node_modules");
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn nested_member_counted_once() {
+        let r = tmp("nested");
+        let repo = main_repo(&r);
+        let nested = repo.join(".claude/worktrees/n1");
+        fs::create_dir_all(repo.join(".git/worktrees/n1")).unwrap();
+        fs::create_dir_all(nested.join("node_modules")).unwrap();
+        fs::write(nested.join("node_modules/x.js"), vec![0u8; 400]).unwrap();
+        fs::write(
+            nested.join(".git"),
+            format!("gitdir: {}\n", repo.join(".git/worktrees/n1").display()),
+        )
+        .unwrap();
+        let sv = survey(&[r.clone()], 6);
+        let g = duplicate_deps(&sv.members, 3);
+        assert_eq!(g[0].total_bytes, 400);
+        let main = g[0].members.iter().find(|m| m.path.ends_with("repo")).unwrap();
+        assert_eq!(main.total_bytes, 0);
         let _ = fs::remove_dir_all(&r);
     }
 }
