@@ -1,0 +1,27 @@
+# Process kinds for `agentgc ps`. Plain substrings, matched case-insensitively
+# against "name + command line". The first kind that matches wins, in file order.
+# Anything that matches nothing is `other`.
+
+[[kind]]
+name = "agent"
+patterns = ["claude", "codex", "gemini", "opencode"]
+
+[[kind]]
+name = "dev-server"
+patterns = ["next dev", "vite", "webpack-dev-server", "nodemon", "bun --hot", "uvicorn --reload", "flask run", "cargo watch"]
+
+[[kind]]
+name = "lsp"
+patterns = ["tsserver", "typescript-language-server", "vtsls", "pyright", "pylsp", "rust-analyzer", "gopls", "eslint_d", "language-server"]
+
+[[kind]]
+name = "test"
+patterns = ["jest", "vitest", "pytest", "cargo test", "playwright", "go test"]
+
+[[kind]]
+name = "build"
+patterns = ["tsc", "webpack", "cargo build", "gradle", "next build"]
+
+[[kind]]
+name = "db"
+patterns = ["postgres", "mysqld", "mongod", "redis-server"]

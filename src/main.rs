@@ -1,4 +1,5 @@
 mod deps;
+mod ps;
 mod rules;
 mod scan;
 mod worktrees;
@@ -47,6 +48,24 @@ enum Cmd {
         #[arg(long, default_value_t = 3)]
         dep_depth: usize,
     },
+    /// Show running processes grouped by task folder, with RAM. Read-only: stops nothing.
+    Ps {
+        /// Process kind rules (TOML). Overrides the built-in rules.
+        #[arg(long)]
+        proc_rules: Option<PathBuf>,
+        /// Print JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+        /// Hide groups under N MB total RAM.
+        #[arg(long, default_value_t = 50)]
+        min_mb: u64,
+        /// Also show processes whose cwd cannot be read.
+        #[arg(long)]
+        all: bool,
+        /// Only groups under this path.
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -62,6 +81,30 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.cmd {
+        Cmd::Ps { proc_rules, json, min_mb, all, root } => {
+            let text = match proc_rules {
+                Some(p) => std::fs::read_to_string(&p)
+                    .map_err(|e| format!("cannot read {}: {e}", p.display()))?,
+                None => ps::DEFAULT_PROC_RULES.to_string(),
+            };
+            let rs = ps::parse_proc_rules(&text)?;
+            let procs = ps::read_system();
+            let groups = ps::build_groups(&procs, &rs, std::process::id());
+            let groups = ps::filter_groups(groups, all, min_mb, root.as_deref());
+            let total: u64 = groups.iter().map(|g| g.total_rss_bytes).sum();
+            let count: usize = groups.iter().map(|g| g.processes.len()).sum();
+            if json {
+                let v = serde_json::json!({
+                    "total_rss_bytes": total,
+                    "process_count": count,
+                    "groups": groups,
+                });
+                println!("{}", serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?);
+            } else {
+                print_ps(&groups, total, count);
+            }
+            Ok(())
+        }
         Cmd::Scan { rules, json } => {
             let text = match rules {
                 Some(p) => std::fs::read_to_string(&p)
@@ -107,6 +150,34 @@ fn run() -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+fn print_ps(groups: &[ps::Group], total: u64, count: usize) {
+    if groups.is_empty() {
+        println!("No process groups to show.");
+        return;
+    }
+    for g in groups {
+        println!("{:>10}  {}  ({} processes)", scan::human(g.total_rss_bytes), g.path, g.processes.len());
+        for r in &g.processes {
+            let idle = if r.idle { "idle" } else { "" };
+            println!(
+                "    {:>7}  {:<10}  {:>10}  {:<4}  {}",
+                r.pid,
+                r.kind,
+                scan::human(r.rss_bytes),
+                idle,
+                r.cmd
+            );
+        }
+    }
+    println!(
+        "{:>10}  TOTAL ({} groups, {} processes). Nothing was stopped.",
+        scan::human(total),
+        groups.len(),
+        count
+    );
+    println!("Idle dev servers and language servers are the usual RAM hogs; stop them yourself if the task is done");
 }
 
 fn print_orphans(found: &[worktrees::Orphan], total: u64) {

@@ -59,6 +59,21 @@ member), and does not follow symlinks. When 2 or more members hold dependencies,
 dependencies, X in total; a shared store (for example pnpm) can cut this. With `--json` the same data (`path` and
 `bytes` per folder) is under `deps`. Read-only.
 
+## Running processes (`ps`)
+
+```
+agentgc ps [--json] [--min-mb N] [--all] [--root PATH] [--proc-rules FILE]
+```
+
+Shows which running processes belong to which task folder (nearest parent with a `.git` file or folder, so a
+worktree and its main checkout are separate groups) and how much RAM each group uses. Groups are sorted by RAM.
+Per process: pid, kind, RAM, `idle` mark, command cut to 80 chars. Kinds (`agent`, `dev-server`, `lsp`, `test`,
+`build`, `db`, `other`) come from substring rules in `rules/processes.toml`; `--proc-rules` replaces them.
+A dev server, language server, test or build with under 1% CPU over a 1 second sample is marked `idle`.
+Default `--min-mb` is 50. `--all` adds processes whose cwd cannot be read ("unknown cwd"). System folders and
+`agentgc` itself are skipped. Text after `--token`, `--key`, `--password`, `--secret` and values of `NAME=value`
+words are hidden. `ps` never stops, signals or changes anything; the hint line is text only.
+
 ## Rules format
 
 Built-in rules live in `rules/default.toml`.
