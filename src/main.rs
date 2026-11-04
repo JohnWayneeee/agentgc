@@ -1,6 +1,7 @@
 mod clean;
 mod compose;
 mod deps;
+mod init;
 mod lock;
 mod out;
 mod proc_kill;
@@ -64,6 +65,31 @@ enum Cmd {
         /// Append one JSON line per item to this file.
         #[arg(long)]
         log: Option<PathBuf>,
+    },
+    /// Install the agent rules (AGENTS.md block, CLAUDE.md block, Claude Code skill) into a project.
+    /// Shows a plan per target first. Writes only after a prompt per target (or --yes-target without a terminal).
+    Init {
+        /// Target: AGENTS.md in --dir. With no target flag, all project targets.
+        #[arg(long)]
+        agents_md: bool,
+        /// Target: CLAUDE.md in --dir.
+        #[arg(long)]
+        claude_md: bool,
+        /// Target: .claude/skills/agentgc/SKILL.md in --dir.
+        #[arg(long)]
+        skill: bool,
+        /// Also target ~/.claude/skills/agentgc/SKILL.md.
+        #[arg(long)]
+        global_skill: bool,
+        /// Project folder. Default: current directory.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Non-interactive only: write this target without asking (agents-md, claude-md, skill, global-skill). Repeatable.
+        #[arg(long = "yes-target", value_name = "NAME")]
+        yes_target: Vec<String>,
+        /// Print the AGENTS.md snippet to stdout and write nothing.
+        #[arg(long)]
+        print: bool,
     },
     /// Find orphan git worktrees (.git file points to a missing gitdir). Deletes nothing.
     Worktrees {
@@ -225,6 +251,9 @@ fn run() -> Result<(), String> {
     match cli.cmd {
         Cmd::Clean { rules, only, yes_item, allow_ask, dry_run, log } => {
             clean::cmd_clean(&clean::CleanArgs { rules, only, yes_item, allow_ask, dry_run, log })
+        }
+        Cmd::Init { agents_md, claude_md, skill, global_skill, dir, yes_target, print } => {
+            init::cmd_init(&init::InitArgs { agents_md, claude_md, skill, global_skill, dir, yes_target, print })
         }
         Cmd::Run(a) => {
             let code = run::cmd_run(&a)?;

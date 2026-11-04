@@ -85,7 +85,17 @@ agentgc task done feat-login --yes   # remove the task (refuses unsaved work)
 
 ## Teach your agent
 
-An agent only uses a tool it knows about. Give it the rules once:
+An agent only uses a tool it knows about. Give it the rules once. Let `agentgc init` do it:
+
+```
+cd my-repo
+agentgc init                          # dry run: shows what would happen per file, writes nothing
+agentgc init --global-skill           # also the skill for all your projects
+```
+
+`init` prints a plan for `AGENTS.md`, `CLAUDE.md` and `.claude/skills/agentgc/SKILL.md`, then asks `Write this? [y/N/q]` for each file. It adds only a marked block to `AGENTS.md` and `CLAUDE.md` and keeps a `.agentgc.bak` copy. It never overwrites an existing `SKILL.md`. Without a terminal, name the files with `--yes-target`. `agentgc init --print` prints the snippet and writes nothing. Restart the agent afterwards so it reads the rules.
+
+Or do it by hand:
 
 - **Any agent** (Codex, Claude Code, others): paste [integrations/AGENTS.md](integrations/AGENTS.md) into your `AGENTS.md` or `CLAUDE.md`.
 - **Claude Code skill:** copy [integrations/claude-code/SKILL.md](integrations/claude-code/SKILL.md) to `.claude/skills/agentgc/SKILL.md` in your project, or to `~/.claude/skills/agentgc/SKILL.md` for all projects.
@@ -143,7 +153,7 @@ It is tested on Windows, and the limits above apply. Run `clean --dry-run` first
 
 If agentgc saves you time, a star on GitHub helps others find it.
 
-Updates and notes: Telegram channel TELEGRAM_INVITE_LINK_PLACEHOLDER
+Updates and notes: [Telegram channel](https://t.me/+pWGhdQdw5DZmYzYy)
 
 ## License
 

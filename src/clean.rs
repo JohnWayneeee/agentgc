@@ -373,7 +373,7 @@ fn flag_decision(it: &Item, a: &CleanArgs) -> Decision {
     }
 }
 
-fn read_answer(input: &mut dyn BufRead) -> Option<String> {
+pub fn read_answer(input: &mut dyn BufRead) -> Option<String> {
     let mut l = String::new();
     match input.read_line(&mut l) {
         Ok(0) | Err(_) => None,

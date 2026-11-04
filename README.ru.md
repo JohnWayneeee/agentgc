@@ -85,7 +85,17 @@ agentgc task done feat-login --yes   # удалить задачу (отказ �
 
 ## Научите своего агента
 
-Агент пользуется только тем инструментом, о котором знает. Дайте ему правила один раз:
+Агент пользуется только тем инструментом, о котором знает. Дайте ему правила один раз. Это делает `agentgc init`:
+
+```
+cd my-repo
+agentgc init                          # пробный запуск: показывает план по каждому файлу, ничего не пишет
+agentgc init --global-skill           # плюс навык для всех ваших проектов
+```
+
+`init` печатает план для `AGENTS.md`, `CLAUDE.md` и `.claude/skills/agentgc/SKILL.md`, затем спрашивает `Write this? [y/N/q]` по каждому файлу. В `AGENTS.md` и `CLAUDE.md` он добавляет только блок с маркерами и хранит копию `.agentgc.bak`. Существующий `SKILL.md` он не перезаписывает. Без терминала называйте файлы через `--yes-target`. `agentgc init --print` печатает текст и ничего не пишет. После установки перезапустите агента, чтобы он прочитал правила.
+
+Или вручную:
 
 - **Любой агент** (Codex, Claude Code и другие): вставьте [integrations/AGENTS.md](integrations/AGENTS.md) в свой `AGENTS.md` или `CLAUDE.md`.
 - **Навык для Claude Code:** скопируйте [integrations/claude-code/SKILL.md](integrations/claude-code/SKILL.md) в `.claude/skills/agentgc/SKILL.md` проекта или в `~/.claude/skills/agentgc/SKILL.md` для всех проектов.
@@ -143,7 +153,7 @@ agentgc task done feat-login --yes   # удалить задачу (отказ �
 
 Если agentgc экономит ваше время, поставьте звезду на GitHub. Так его найдут другие.
 
-Обновления и заметки: Telegram-канал TELEGRAM_INVITE_LINK_PLACEHOLDER
+Обновления и заметки: [Telegram-канал](https://t.me/+pWGhdQdw5DZmYzYy)
 
 ## Лицензия
 

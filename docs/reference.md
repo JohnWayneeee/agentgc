@@ -448,6 +448,37 @@ It also guards an exclusive resource (a phone, a simulator, one browser profile)
 Idea credit: [heavy](https://github.com/mokevnin/heavy), a counting semaphore for macOS and Linux. `agentgc run` is
 separate code; it adds Windows and named resources.
 
+## Install agent rules (`init`)
+
+```
+agentgc init [--agents-md] [--claude-md] [--skill] [--global-skill] [--dir PATH] [--yes-target NAME]... [--print]
+```
+
+Installs the rules from `integrations/` (embedded in the binary) so an agent knows about agentgc at once.
+It always prints a plan first and writes only after a confirmation.
+
+- **Targets.** `<dir>/AGENTS.md` (`agents-md`), `<dir>/CLAUDE.md` (`claude-md`), `<dir>/.claude/skills/agentgc/SKILL.md`
+  (`skill`). With none of these three flags, all three are used. `--global-skill` adds
+  `~/.claude/skills/agentgc/SKILL.md` (`global-skill`; home from `HOME` or `USERPROFILE`, refused when unknown).
+  `--dir` defaults to the current directory and must exist. Target names and paths are fixed.
+- **Plan.** Per target: the full path, what would happen (create the file, append a block, update the block,
+  already up to date, refuse) and the size of the change.
+- **Confirmation.** With a terminal: `Write this? [y/N/q]` per target (`q` or end of input stops the run).
+  Without a terminal: only targets named with `--yes-target NAME` are written, and with none nothing is written.
+  In a terminal `--yes-target` is ignored. An unknown name is an error.
+- **AGENTS.md and CLAUDE.md.** User text is never overwritten. The snippet sits between `<!-- agentgc:begin -->`
+  and `<!-- agentgc:end -->`. A new file is created. A file without the block gets it appended after one blank line.
+  A file with the block gets only the text between the markers replaced, when it differs. Unbalanced or duplicated
+  markers are refused. Before a change the file is copied once to `<name>.agentgc.bak`; an existing `.bak` is refused.
+  The new text goes through a temp file in the same folder, then a rename.
+- **SKILL.md.** Created only when absent. Equal to the embedded text: already up to date. Different: refused, never
+  overwritten.
+- **Guards (never skipped).** A target that is a symlink or a folder is refused. A project target whose parent folder
+  resolves outside `--dir` is refused. The only delete is removing the tool's own temp file after a failed write.
+- **`--print`.** Prints the AGENTS.md snippet and writes nothing.
+
+After a write, restart the agent or open a new session so it re-reads the rules.
+
 ## SECURITY
 
 `clean` runs no command from the rules, but it deletes. Read every rule path first and use `--dry-run`.
