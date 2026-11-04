@@ -167,6 +167,7 @@ supervisor started (pid 27980)
 | `agentgc task new` / `list` / `done` | Creates, lists and removes a task environment: worktree, ports, env file, database name. `list` also shows changed files, ahead/behind and running services. |
 | `agentgc up` / `down` / `status` / `logs` / `restart` | Starts, stops, restarts and checks a task's services, and shows their logs. |
 | `agentgc run` | Queues heavy commands so only some run at once. Guards named exclusive resources. |
+| `agentgc hook install` | Prints (with `--apply`: merges) Claude Code hooks that queue heavy commands through `agentgc run --` and print the task status at session start. Dry run by default. |
 | `agentgc init` | Installs the agent rules into `AGENTS.md`, `CLAUDE.md` and a Claude Code skill, after you confirm each file. |
 
 </div>
@@ -192,6 +193,8 @@ agentgc init --global-skill           # also the skill for all your projects
 ```
 
 `init` prints a plan for `AGENTS.md`, `CLAUDE.md` and `.claude/skills/agentgc/SKILL.md`, then asks `Write this? [y/N/q]` for each file. It adds only a marked block to `AGENTS.md` and `CLAUDE.md` and keeps a `.agentgc.bak` copy. It never overwrites an existing `SKILL.md`. Without a terminal, name the files with `--yes-target`. `agentgc init --print` prints the snippet and writes nothing. Restart the agent afterwards so it reads the rules.
+
+Rules are only advice. To make Claude Code obey, add hooks. `agentgc hook install` prints the `settings.json` snippet and writes nothing. `--apply` merges it (with a `.agentgc.bak` copy; `--global` for all projects). The PreToolUse hook wraps plain `cargo test`, `npm run build` and similar calls in `agentgc run --`. The SessionStart hook prints `agentgc status` and the task env.
 
 <details>
 <summary>Or do it by hand</summary>

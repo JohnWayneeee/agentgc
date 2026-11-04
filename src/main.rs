@@ -2,6 +2,7 @@ mod clean;
 mod compose;
 mod deps;
 mod doctor;
+mod hook;
 mod init;
 mod lock;
 mod out;
@@ -92,6 +93,11 @@ enum Cmd {
         /// Print the AGENTS.md snippet to stdout and write nothing.
         #[arg(long)]
         print: bool,
+    },
+    /// Claude Code hooks: queue heavy commands, print status at session start. `hook install` is a dry run unless --apply.
+    Hook {
+        #[command(subcommand)]
+        cmd: HookCmd,
     },
     /// Find orphan git worktrees (.git file points to a missing gitdir). Deletes nothing.
     Worktrees {
@@ -257,6 +263,26 @@ enum TaskCmd {
     },
 }
 
+#[derive(Subcommand)]
+enum HookCmd {
+    /// PreToolUse hook: reads the hook JSON on stdin, wraps heavy Bash commands in `agentgc run --`.
+    PreToolUse,
+    /// SessionStart hook: prints `agentgc status` and `.agentgc/task.env`.
+    SessionStart,
+    /// Print the settings.json snippet. With --apply, merge it into the settings file (backup first).
+    Install {
+        /// Target ~/.claude/settings.json instead of <dir>/.claude/settings.json.
+        #[arg(long)]
+        global: bool,
+        /// Project folder. Default: current directory.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Really edit the settings file. Without it nothing is written.
+        #[arg(long)]
+        apply: bool,
+    },
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -276,6 +302,11 @@ fn run() -> Result<(), String> {
         Cmd::Init { agents_md, claude_md, skill, global_skill, dir, yes_target, print } => {
             init::cmd_init(&init::InitArgs { agents_md, claude_md, skill, global_skill, dir, yes_target, print })
         }
+        Cmd::Hook { cmd } => match cmd {
+            HookCmd::PreToolUse => hook::cmd_pre_tool_use(),
+            HookCmd::SessionStart => hook::cmd_session_start(),
+            HookCmd::Install { global, dir, apply } => hook::cmd_install(&hook::InstallArgs { global, dir, apply }),
+        },
         Cmd::Run(a) => {
             let code = run::cmd_run(&a)?;
             if code != 0 {

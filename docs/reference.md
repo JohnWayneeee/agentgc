@@ -571,6 +571,29 @@ It always prints a plan first and writes only after a confirmation.
 
 After a write, restart the agent or open a new session so it re-reads the rules.
 
+## Claude Code hooks (`hook`)
+
+```
+agentgc hook install [--global] [--dir PATH] [--apply]
+agentgc hook pre-tool-use      # PreToolUse hook: JSON on stdin
+agentgc hook session-start     # SessionStart hook
+```
+
+Rules are only advice. The hooks make Claude Code follow them.
+
+- **`install`.** Dry run by default: prints the target path and the JSON snippet, writes nothing. `--apply` merges
+  the snippet into `<dir>/.claude/settings.json` (`--global`: `~/.claude/settings.json`). User keys and other hooks
+  stay. The file is reformatted as pretty JSON. A copy goes to `settings.json.agentgc.bak` first. An existing `.bak`,
+  invalid JSON, a wrong shape, a symlink or a folder is refused. Both hooks present: "Already up to date".
+- **`pre-tool-use`.** Only for the Bash tool. A command that is one plain call of a known heavy program is rewritten
+  to `agentgc run -- <command>`: `cargo test|build|check|clippy|bench|nextest`, `npm|pnpm|yarn test|build`,
+  `npm|pnpm|yarn|bun run build|test|e2e|lint|typecheck`, `bun test`, `go test|build`, `dotnet test|build`,
+  `gradle test|build`, `mvn test|package|verify`, `pytest`, `tsc`. Commands with shell syntax (`& | ; < > $`, quotes,
+  backslash, globs, a leading `VAR=`) and commands that already start with `agentgc` are not touched. The output sets
+  `permissionDecision: allow`, so the wrapped command skips the permission prompt. Bad input: no output, no change.
+- **`session-start`.** Prints `agentgc status` (when the folder is a task) and `.agentgc/task.env`, plus one line
+  that tells the agent to use `agentgc run --` for heavy commands. Claude Code adds the output to the context.
+
 ## SECURITY
 
 `clean` runs no command from the rules, but it deletes. Read every rule path first and use `--dry-run`.
