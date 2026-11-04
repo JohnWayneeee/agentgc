@@ -2,6 +2,16 @@ agentgc gives each AI coding agent task its own environment: a git worktree, fre
 
 agentgc does not start AI agents. It prepares and cleans the environment around them.
 
+## What is new in 0.3.0
+
+- `agentgc task review NAME` shows what a task changed before you finish it. It only reads.
+- Claude Code hooks: `agentgc hook install` adds a `PreToolUse` hook that queues heavy commands through `agentgc run --`, and a `SessionStart` hook that prints the task status and env. The hook asks for approval by default; `--allow` is the opt-in to skip the question. Running `hook install` again replaces the old agentgc entry.
+- `task done` resumes after a refused branch delete: the worktree is gone, the registry entry stays, and the next run retries the branch delete.
+- `agentgc doctor` lists hard-coded ports and database names in the files git tracks. It only reads.
+- `agentgc run --min-interval` waits at least that many seconds between the starts of two queued commands.
+- `db.disconnect` in `agentgc.task.toml` runs your command before the database drop in `task done`.
+- `agentgc worktrees --deps` estimates how much a shared dependency store would save.
+
 ## What is new in 0.2.0
 
 - `agentgc task list` shows the state of every task: changed files, commits ahead and behind the base branch, and how many services run. `--json` has the same fields. The command only reads.

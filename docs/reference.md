@@ -365,22 +365,23 @@ Steps with `--yes` (the first failure stops the run and the already done steps a
 - a. With `--kill-procs`: stop the stoppable processes (never `agentgc` itself), wait up to 3 s, report each pid.
   Without it: "not stopped (use --kill-procs)".
 - b. A non-empty `disconnect` template runs first (use it to kill stale DB connections; your own command, agentgc has
-  no SQL), then `drop`. Both come from the registry entry with `{db}` and `{name}` filled (whitespace split, no
-  shell, cwd = repo root). A failure of either aborts, unless `--force`.
-- c. Deletes the supervisor's generated files (see "Supervisor"), then `<worktree>/.agentgc/task.env`, then `.agentgc` only if it is empty.
-- d. `git worktree remove <path>`; `--force` is passed to git only when you passed `--force`. If git refuses, the
+  no SQL). It comes from the registry entry with `{db}` and `{name}` filled (whitespace split, no shell, cwd = repo
+  root). A failure aborts, unless `--force`.
+- c. The `drop` template runs next, filled and run the same way. A failure aborts, unless `--force`.
+- d. Deletes the supervisor's generated files (see "Supervisor"), then `<worktree>/.agentgc/task.env`, then `.agentgc` only if it is empty.
+- e. `git worktree remove <path>`; `--force` is passed to git only when you passed `--force`. If git refuses, the
   message is printed and `done` stops. The folder is never deleted by any other means.
-- e. `git branch -d <branch>` (`-D` with `--force`). If `-d` refuses (for example the commits are pushed but not merged into the checked-out branch), `done` stops
-  with "step e" and keeps the registry entry, so the run can resume. Merge the branch and run again, or use `--force` (`-D`).
-- f. Deletes the registry file.
-- g. Prints "freed about X" (size measured before step a).
+- f. `git branch -d <branch>` (`-D` with `--force`). If `-d` refuses (for example the commits are pushed but not merged into the checked-out branch), `done` stops
+  with "step f" and keeps the registry entry, so the run can resume. Merge the branch and run again, or use `--force` (`-D`).
+- g. Deletes the registry file.
+- h. Prints "freed about X" (size measured before step a).
 
 **Resume.** If a run stopped half way (for example a shell held the folder, so git removed the worktree but an empty
 `<repo>/worktrees/NAME` stayed), run `agentgc task done NAME --yes` again. Resume state: the registry entry exists, git
 no longer lists the worktree, and the folder is missing or has no entries at all (hidden ones too). Then only the rest
 runs: `remove_dir` on the empty folder, `git branch -d` (`-D` with `--force`, same blockers), delete the registry file.
 Dry run shows this plan. A non-empty folder without `.git`, or a folder git still lists, is still refused. A refused
-branch delete (step e) is resumable the same way: the worktree is gone, the registry file stays, and the next run only
+branch delete (step f) is resumable the same way: the worktree is gone, the registry file stays, and the next run only
 retries the branch delete and the registry delete. A failed
 step prints which step failed and `agentgc task done NAME --yes` as the next command; a folder that cannot be removed
 may be held by a program (shell cwd, editor): close it first.

@@ -425,10 +425,10 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         outln!("  b. run disconnect command: {c}");
     }
     match &drop_cmd {
-        Some(c) => outln!("  b. run drop command: {c}"),
-        None => outln!("  b. no drop command"),
+        Some(c) => outln!("  c. run drop command: {c}"),
+        None => outln!("  c. no drop command"),
     }
-    outln!("  c. delete {}/.agentgc/task.env, then .agentgc if empty", plain(&t.path));
+    outln!("  d. delete {}/.agentgc/task.env, then .agentgc if empty", plain(&t.path));
     outln!("     delete the supervisor files if present (daemon.json, daemon.lock, daemon.stop, restart.*, logs/*.log, logs/*.log.1), then the empty logs folder");
     if let Some(c) = &compose_rel {
         outln!("     delete the rendered compose file {c} (one file, only if untracked and inside the worktree)");
@@ -438,7 +438,7 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         outln!("     delete the generated file {g} (only if untracked, a plain file, inside the worktree)");
     }
     outln!(
-        "  d. {}",
+        "  e. {}",
         if t.exists {
             format!("git worktree remove{} {}", if a.force { " --force" } else { "" }, plain(&t.path))
         } else if resume_dir {
@@ -448,14 +448,14 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         }
     );
     outln!(
-        "  e. {}",
+        "  f. {}",
         if branch_exists {
             format!("git branch {} {}", if a.force { "-D" } else { "-d" }, entry.branch)
         } else {
             "no branch to delete".into()
         }
     );
-    outln!("  f. delete registry file {}", reg.display());
+    outln!("  g. delete registry file {}", reg.display());
     outln!("  Never touched: anything outside the task folder, the main checkout, other tasks, remote branches.");
 
     if sup_blocked {
@@ -589,7 +589,7 @@ fn execute(
         outln!("  {} process(es) left running; the folder may stay locked on Windows", left.len());
     }
 
-    // b. disconnect, then drop
+    // b. disconnect, c. drop
     if let Some(c) = disconnect_cmd {
         match task::run_command(c, root) {
             Ok(()) => done.push(format!("ran disconnect command: {c}")),
@@ -605,7 +605,7 @@ fn execute(
         }
     }
 
-    // c. own files only. No recursive delete anywhere.
+    // d. own files only. No recursive delete anywhere.
     if t.exists {
         if let Some(rel) = compose_rel {
             remove_recorded_file(&t.path, rel, done)?;
@@ -629,7 +629,7 @@ fn execute(
             }
         }
 
-        // d. git removes the worktree
+        // e. git removes the worktree
         let wt = plain(&t.path);
         let mut args = vec!["worktree", "remove"];
         if a.force {
@@ -639,7 +639,7 @@ fn execute(
         let o = task::git(root, &args)?;
         if !o.status.success() {
             return Err(format!(
-                "step d (git worktree remove) failed: {}. A program may hold the folder (a shell with its cwd inside, an editor): close it first",
+                "step e (git worktree remove) failed: {}. A program may hold the folder (a shell with its cwd inside, an editor): close it first",
                 stderr_of(&o)
             ));
         }
@@ -651,7 +651,7 @@ fn execute(
         // Only an empty folder is left. `remove_dir` fails on a non-empty folder; never recursive.
         fs::remove_dir(&t.path).map_err(|e| {
             format!(
-                "step d (remove the empty folder {}) failed: {e}. A program may hold the folder (a shell with its cwd inside, an editor): close it first",
+                "step e (remove the empty folder {}) failed: {e}. A program may hold the folder (a shell with its cwd inside, an editor): close it first",
                 plain(&t.path)
             )
         })?;
@@ -660,7 +660,7 @@ fn execute(
         outln!("  worktree folder is already gone; run `git worktree prune` if git still lists it");
     }
 
-    // e. branch
+    // f. branch
     if branch_exists {
         let flag = if a.force { "-D" } else { "-d" };
         let o = task::git(root, &["branch", flag, &entry.branch])?;
@@ -668,15 +668,15 @@ fn execute(
             done.push(format!("git branch {flag} {}", entry.branch));
         } else {
             return Err(format!(
-                "step e (git branch {flag} {}) failed: {}. The worktree is gone; the registry entry stays so the run can resume. Merge the branch and run again, or use --force (-D)",
+                "step f (git branch {flag} {}) failed: {}. The worktree is gone; the registry entry stays so the run can resume. Merge the branch and run again, or use --force (-D)",
                 entry.branch,
                 stderr_of(&o)
             ));
         }
     }
 
-    // f. registry
-    fs::remove_file(reg).map_err(|e| format!("step f (delete the registry file) failed: cannot delete {}: {e}", reg.display()))?;
+    // g. registry
+    fs::remove_file(reg).map_err(|e| format!("step g (delete the registry file) failed: cannot delete {}: {e}", reg.display()))?;
     done.push(format!("deleted {}", reg.display()));
     Ok(())
 }

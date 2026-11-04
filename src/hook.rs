@@ -107,15 +107,28 @@ pub fn snippet(allow: bool) -> Value {
     }})
 }
 
-fn has_command(entries: &[Value], cmd: &str) -> bool {
-    entries.iter().any(|e| {
-        e.get("hooks").and_then(Value::as_array).is_some_and(|hs| {
-            hs.iter().any(|h| h.get("command").and_then(Value::as_str) == Some(cmd))
-        })
-    })
+fn entry_commands(e: &Value) -> Vec<&str> {
+    e.get("hooks")
+        .and_then(Value::as_array)
+        .map(|hs| hs.iter().filter_map(|h| h.get("command").and_then(Value::as_str)).collect())
+        .unwrap_or_default()
 }
 
-/// Adds our two hook entries to a settings object. Returns whether anything changed.
+fn has_command(entries: &[Value], cmd: &str) -> bool {
+    entries.iter().any(|e| entry_commands(e).contains(&cmd))
+}
+
+/// An agentgc pre-tool-use entry: the command is `agentgc hook pre-tool-use`, with or without flags.
+fn is_our_pre(e: &Value) -> bool {
+    entry_commands(e).iter().any(|c| *c == PRE_CMD || c.starts_with("agentgc hook pre-tool-use "))
+}
+
+/// Keeps entries that are not ours.
+fn is_our_pre_not(e: &Value) -> bool {
+    !is_our_pre(e)
+}
+
+/// Adds our two hook entries, replacing an agentgc pre-tool-use entry of the other mode to a settings object. Returns whether anything changed.
 pub fn merge_settings(settings: &mut Value, allow: bool) -> Result<bool, String> {
     let root = settings.as_object_mut().ok_or("settings.json is not a JSON object")?;
     let hooks = root.entry("hooks").or_insert_with(|| json!({}));
@@ -126,10 +139,22 @@ pub fn merge_settings(settings: &mut Value, allow: bool) -> Result<bool, String>
     for (event, cmd) in [("PreToolUse", pre), ("SessionStart", START_CMD)] {
         let list = hooks.entry(event).or_insert_with(|| json!([]));
         let list = list.as_array_mut().ok_or_else(|| format!("hooks.{event} is not an array"))?;
-        if !has_command(list, cmd) {
-            list.push(snip["hooks"][event][0].clone());
-            changed = true;
+        if has_command(list, cmd) && (event != "PreToolUse" || list.iter().filter(|e| is_our_pre(e)).count() == 1) {
+            continue;
         }
+        let new = snip["hooks"][event][0].clone();
+        if event == "PreToolUse" {
+            // replace our own entry (default <-> --allow), in place, never add a second one
+            let first = list.iter().position(is_our_pre);
+            list.retain(is_our_pre_not);
+            match first {
+                Some(i) => list.insert(i.min(list.len()), new),
+                None => list.push(new),
+            }
+        } else {
+            list.push(new);
+        }
+        changed = true;
     }
     Ok(changed)
 }
@@ -315,6 +340,48 @@ mod tests {
         let v: Value = serde_json::from_str(&fs::read_to_string(d.join(".claude/settings.json")).unwrap()).unwrap();
         assert_eq!(v["hooks"]["PreToolUse"][0]["hooks"][0]["command"], "agentgc hook pre-tool-use --allow");
         assert_eq!(v, snippet(true));
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    fn pre_cmds(d: &PathBuf) -> Vec<String> {
+        let v: Value = serde_json::from_str(&fs::read_to_string(d.join(".claude/settings.json")).unwrap()).unwrap();
+        v["hooks"]["PreToolUse"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|e| entry_commands(e).into_iter().map(String::from).collect::<Vec<_>>())
+            .collect()
+    }
+
+    #[test]
+    fn install_switches_between_default_and_allow() {
+        let d = tmp("switch");
+        inst(&d, true).unwrap();
+        assert_eq!(pre_cmds(&d), [PRE_CMD]);
+        // the backup rule blocks a second apply, so remove the backup between applies
+        let bak = d.join(".claude/settings.json.agentgc.bak");
+        let out = inst_allow(&d).unwrap();
+        assert!(out.contains("Written"));
+        assert_eq!(pre_cmds(&d), [PRE_CMD_ALLOW]);
+        let _ = fs::remove_file(&bak);
+        inst(&d, true).unwrap();
+        assert_eq!(pre_cmds(&d), [PRE_CMD]);
+        let _ = fs::remove_file(&bak);
+        assert!(inst(&d, true).unwrap().contains("Already up to date"));
+        let v: Value = serde_json::from_str(&fs::read_to_string(d.join(".claude/settings.json")).unwrap()).unwrap();
+        assert_eq!(v["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn install_replace_keeps_foreign_entries() {
+        let d = tmp("replace");
+        fs::create_dir_all(d.join(".claude")).unwrap();
+        let orig = r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"agentgc hook pre-tool-use --allow"}]},{"matcher":"Edit","hooks":[{"type":"command","command":"mine"}]}]}}"#;
+        fs::write(d.join(".claude/settings.json"), orig).unwrap();
+        inst(&d, true).unwrap();
+        assert_eq!(pre_cmds(&d), [PRE_CMD, "mine"]);
+        assert_eq!(fs::read_to_string(d.join(".claude/settings.json.agentgc.bak")).unwrap(), orig);
         let _ = fs::remove_dir_all(&d);
     }
 

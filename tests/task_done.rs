@@ -384,14 +384,14 @@ fn branch_delete_refusal_is_resumable() {
     git(&wt, &["commit", "-m", "feature"]);
     git(&wt, &["push", "origin", "one"]);
     let (ok, t) = agentgc(&repo, &["done", "one", "--yes"]);
-    assert!(!ok && t.contains("step e"), "{t}");
+    assert!(!ok && t.contains("step f"), "{t}");
     assert!(t.contains("task done one --yes"), "{t}");
     assert!(!wt.exists(), "worktree is gone");
     assert!(reg(&repo, "one").exists(), "registry stays");
     assert!(git_try(&repo, &["rev-parse", "--verify", "refs/heads/one"]));
     // same refusal on resume
     let (ok, t) = agentgc(&repo, &["done", "one", "--yes"]);
-    assert!(!ok && t.contains("step e"), "{t}");
+    assert!(!ok && t.contains("step f"), "{t}");
     assert!(reg(&repo, "one").exists());
     // merge, then resume succeeds
     git(&repo, &["merge", "one"]);
