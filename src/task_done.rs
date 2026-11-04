@@ -4,6 +4,8 @@ use crate::out::{self, outln};
 use crate::proc_kill::{wait_gone, Killer, SysKiller};
 use crate::ps::{self, KindRule, ProcInfo};
 use crate::scan;
+use crate::sup;
+use crate::sup_cmd;
 use crate::task::{self, Entry};
 use crate::task_config as tc;
 use std::collections::BTreeMap;
@@ -17,6 +19,8 @@ pub struct DoneArgs {
     pub yes: bool,
     pub kill_procs: bool,
     pub force: bool,
+    /// Stop the supervisor and its services first (like `agentgc down`).
+    pub stop_services: bool,
 }
 
 /// Kinds `done --kill-procs` may stop. `agent`, `db` and `other` never.
@@ -326,6 +330,19 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
     }
     outln!("  (processes whose cwd cannot be read are not checked)");
 
+    // supervisor of the task's services: refuse while it runs, unless --stop-services
+    let sup_alive = t.exists && sup_cmd::supervisor_alive(&t.path);
+    let mut sup_blocked = false;
+    if sup_alive {
+        let pid = sup::read_state(&t.path).map(|s| s.pid.to_string()).unwrap_or_else(|| "?".into());
+        if a.stop_services {
+            outln!("  [note]    the services supervisor runs (pid {pid}); --stop-services stops it first");
+        } else {
+            outln!("  {} the services supervisor runs (pid {pid}): use --stop-services or `agentgc down`", tag(false));
+            sup_blocked = true;
+        }
+    }
+
     // drop command
     let mut vars: BTreeMap<String, String> = BTreeMap::new();
     vars.insert("name".into(), name.clone());
@@ -344,6 +361,9 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
 
     let stoppable: Vec<&Found> = found.iter().filter(|f| f.stoppable).collect();
     outln!("Steps with --yes:");
+    if sup_alive && a.stop_services {
+        outln!("  0. stop the supervisor and its services (like `agentgc down`{})", if a.force { " --force" } else { "" });
+    }
     if a.kill_procs && !stoppable.is_empty() {
         outln!("  a. stop {} process(es) (dev-server, lsp, test, build only)", stoppable.len());
     } else if !stoppable.is_empty() {
@@ -356,6 +376,7 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
         None => outln!("  b. no drop command"),
     }
     outln!("  c. delete {}/.agentgc/task.env, then .agentgc if empty", plain(&t.path));
+    outln!("     delete the supervisor files if present (daemon.json, daemon.lock, daemon.stop, restart.*, logs/*.log, logs/*.log.1), then the empty logs folder");
     if let Some(c) = &compose_rel {
         outln!("     delete the rendered compose file {c} (one file, only if untracked and inside the worktree)");
         outln!("     hint (never run by agentgc): {}", compose_hint(&name));
@@ -382,6 +403,9 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
     outln!("  f. delete registry file {}", reg.display());
     outln!("  Never touched: anything outside the task folder, the main checkout, other tasks, remote branches.");
 
+    if sup_blocked {
+        outln!("BLOCKED: the supervisor runs. --force does not skip this; use --stop-services.");
+    }
     if !blockers.is_empty() {
         if a.force {
             let lost: Vec<String> = blockers.iter().map(|b| b.1.clone()).collect();
@@ -394,6 +418,9 @@ pub fn cmd_done(a: &DoneArgs) -> Result<(), String> {
     if !a.yes {
         outln!("Dry run: nothing changed. Add --yes to execute.");
         return Ok(());
+    }
+    if sup_blocked {
+        return Err("the services supervisor runs; use --stop-services (or `agentgc down`); nothing was changed".into());
     }
     if !blockers.is_empty() && !a.force {
         return Err("blocked by the checks above; nothing was changed".into());
@@ -465,6 +492,16 @@ fn execute(
     generated: &[String],
     done: &mut Vec<String>,
 ) -> Result<(), String> {
+    // 0. the supervisor and its services, like `agentgc down`
+    if a.stop_services && t.exists && sup_cmd::supervisor_alive(&t.path) {
+        sup_cmd::stop_supervisor(&t.path, a.force, &SysKiller)
+            .map_err(|e| format!("cannot stop the supervisor, nothing was changed: {e}"))?;
+        if sup_cmd::supervisor_alive(&t.path) {
+            return Err("the supervisor is still running; nothing was changed".into());
+        }
+        done.push("stopped the supervisor and its services".into());
+    }
+
     // a. processes
     let stoppable: Vec<&Found> = found.iter().filter(|f| f.stoppable).collect();
     let mut left: Vec<&Found> = found.iter().filter(|f| !f.stoppable).collect();
@@ -510,6 +547,9 @@ fn execute(
         }
         let ad = t.path.join(".agentgc");
         if fs::symlink_metadata(&ad).map_or(false, |m| m.is_dir()) {
+            for p in sup::remove_daemon_files(&ad)? {
+                done.push(format!("deleted {}", plain(&p)));
+            }
             let env = ad.join("task.env");
             if fs::symlink_metadata(&env).map_or(false, |m| m.is_file()) {
                 fs::remove_file(&env).map_err(|e| format!("cannot delete {}: {e}", env.display()))?;

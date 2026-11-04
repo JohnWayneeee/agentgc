@@ -9,6 +9,9 @@ mod ps_stop;
 mod rules;
 mod run;
 mod scan;
+mod sup;
+mod sup_cmd;
+mod sup_run;
 mod task;
 mod task_done;
 mod task_config;
@@ -121,6 +124,40 @@ enum Cmd {
     },
     /// Queue heavy commands and exclusive resources with advisory file locks. No daemon.
     Run(run::RunArgs),
+    /// Start the opt-in supervisor of this task's services (from .agentgc/services.json). No system service.
+    Up(sup_cmd::Target),
+    /// Stop the supervisor and its services (stop marker first, then by pid with an identity check).
+    Down {
+        #[command(flatten)]
+        target: sup_cmd::Target,
+        /// Hard kill when the supervisor ignores the stop marker (needed on Windows).
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show the supervisor and each service: pid, state, restarts, port, URL.
+    Status(sup_cmd::Target),
+    /// Print the tail of a service log.
+    Logs {
+        /// Service name.
+        name: String,
+        /// How many lines.
+        #[arg(long, default_value_t = 50)]
+        lines: usize,
+        #[command(flatten)]
+        target: sup_cmd::Target,
+    },
+    /// Ask the supervisor to restart one service.
+    Restart {
+        /// Service name.
+        name: String,
+        #[command(flatten)]
+        target: sup_cmd::Target,
+    },
+    /// The supervisor process itself. Started by `up`; not for people.
+    #[command(name = "__supervise", hide = true)]
+    Supervise {
+        worktree: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -159,6 +196,9 @@ enum TaskCmd {
         /// Discard blockers (uncommitted work, unsaved commits). Never skips the path guard.
         #[arg(long)]
         force: bool,
+        /// Stop the task's supervisor and services first, like `agentgc down`. Without it `done` refuses while one runs.
+        #[arg(long)]
+        stop_services: bool,
     },
     /// List registered tasks with status (ok, missing, dirty). Read-only.
     List {
@@ -193,12 +233,18 @@ fn run() -> Result<(), String> {
             }
             Ok(())
         }
+        Cmd::Up(t) => sup_cmd::cmd_up(&t),
+        Cmd::Down { target, force } => sup_cmd::cmd_down(&target, force),
+        Cmd::Status(t) => sup_cmd::cmd_status(&t),
+        Cmd::Logs { name, lines, target } => sup_cmd::cmd_logs(&target, &name, lines),
+        Cmd::Restart { name, target } => sup_cmd::cmd_restart(&target, &name),
+        Cmd::Supervise { worktree } => sup_run::run_supervisor(&worktree),
         Cmd::Task { cmd } => match cmd {
             TaskCmd::New { name, repo, config, run_setup, yes } => {
                 task::cmd_new(&task::NewArgs { name, repo, config, run_setup, yes })
             }
-            TaskCmd::Done { name, repo, config, yes, kill_procs, force } => {
-                task_done::cmd_done(&task_done::DoneArgs { name, repo, config, yes, kill_procs, force })
+            TaskCmd::Done { name, repo, config, yes, kill_procs, force, stop_services } => {
+                task_done::cmd_done(&task_done::DoneArgs { name, repo, config, yes, kill_procs, force, stop_services })
             }
             TaskCmd::List { repo, json } => task::cmd_list(repo, json),
         },
@@ -283,15 +329,19 @@ fn print_ps(groups: &[ps::Group], total: u64, count: usize) {
     }
     for g in groups {
         println!("{:>10}  {}  ({} processes)", scan::human(g.total_rss_bytes), g.path, g.processes.len());
+        // pids that the task's supervisor recorded in .agentgc/daemon.json (read-only)
+        let sup_pids: Vec<u32> = if g.unknown { Vec::new() } else { sup::recorded_pids(std::path::Path::new(&g.path)) };
         for r in &g.processes {
             let idle = if r.idle { "idle" } else { "" };
+            let mark = if sup_pids.contains(&r.pid) { "  supervised" } else { "" };
             println!(
-                "    {:>7}  {:<10}  {:>10}  {:<4}  {}",
+                "    {:>7}  {:<10}  {:>10}  {:<4}  {}{}",
                 r.pid,
                 r.kind,
                 scan::human(r.rss_bytes),
                 idle,
-                r.cmd
+                r.cmd,
+                mark
             );
         }
     }

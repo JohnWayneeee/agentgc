@@ -8,11 +8,13 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "fs4",
+ "libc",
  "serde",
  "serde_json",
  "sysinfo",
  "toml",
  "trash",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -3,7 +3,7 @@
 Garbage collector for the disk junk that CLI coding agents and dev tools leave behind:
 package caches, browser downloads, agent sessions, temp files.
 
-**Status:** `scan`, `worktrees`, `ps`, `task list` and `run --status` are read-only (`ps --stop --yes` stops idle processes, see below). Only `task done --yes` and `clean` delete: `task done` a finished task folder (see below), `clean` the junk that `scan` lists, one item at a time (see `clean`). `run` writes only its own slot and info files.
+**Status:** `scan`, `worktrees`, `ps`, `task list`, `status`, `logs` and `run --status` are read-only (`ps --stop --yes` stops idle processes, see below). Only `task done --yes` and `clean` delete: `task done` a finished task folder (see below), `clean` the junk that `scan` lists, one item at a time (see `clean`). `run` writes only its own slot and info files.
 
 ## Build
 
@@ -163,7 +163,7 @@ Tests use a fake and never signal a real process.
 ```
 agentgc task new NAME [--repo PATH] [--config FILE] [--run-setup] [--yes]
 agentgc task list [--repo PATH] [--json]
-agentgc task done NAME [--repo PATH] [--config FILE] [--yes] [--kill-procs] [--force]
+agentgc task done NAME [--repo PATH] [--config FILE] [--yes] [--kill-procs] [--force] [--stop-services]
 ```
 
 Parallel agents each need an isolated environment: own worktree, ports, database name, queue/cache prefix.
@@ -266,8 +266,8 @@ example `{{env.PREFIX}}`), `{{worktree}}`. An unknown placeholder is an error th
 
 Docker-free setup: each task runs plain processes plus one shared database server. `[services.NAME]` is optional.
 `[db]` already gives every task its own database name inside one server, so `[db]` + `[services]` replace a
-per-task compose stack. agentgc only describes and prints the commands. It never starts, supervises or stops them.
-No daemon.
+per-task compose stack. agentgc describes and prints the commands. It starts them only when you run `agentgc up` (see
+"Supervisor" below). No system service.
 
 ```toml
 [ports]
@@ -289,7 +289,7 @@ port = "api"
 - `task new` prints, per service, the ready command and its cwd (also in the dry run). With `--yes` it writes, with
   `create_new` and never over an existing file: `<worktree>/.agentgc/services.json` (array of `name`, `cmd`, `cwd`,
   `port` as the allocated number or `null`), `services.sh` (`cd <cwd> && <cmd>`) and `services.ps1`
-  (`Set-Location <cwd>; <cmd>`), one plain line per service, no comments. Run the lines yourself.
+  (`Set-Location <cwd>; <cmd>`), one plain line per service, no comments. Run the lines yourself, or use `agentgc up`.
 - A service with `port` adds the route `<name>.<task>.localhost:<port>` and `AGENTGC_ROUTE_<NAME>` to
   `.agentgc/task.env`, like `[routes]`. If `[routes]` already has that name, the `[routes]` entry wins.
 - The registry records the generated files (`generated_files`) and the service names (`services`); old entries
@@ -303,7 +303,7 @@ port = "api"
 ### `task done`
 
 ```
-agentgc task done NAME [--repo PATH] [--config FILE] [--yes] [--kill-procs] [--force]
+agentgc task done NAME [--repo PATH] [--config FILE] [--yes] [--kill-procs] [--force] [--stop-services]
 ```
 
 Removes a finished task. This is the only command that deletes. **Dry run is the default:** it prints the plan and
@@ -321,6 +321,7 @@ Checks (read-only, run first):
    `build` can be stopped. `agent`, `db` and `other` are never stopped, only listed as "left running"; the folder may
    stay locked on Windows. Processes whose cwd cannot be read are not seen.
 
+A running services supervisor refuses the run (not skippable with `--force`); `--stop-services` stops it first (step 0).
 Blockers abort before any change. With `--force` a loud line "FORCE: this will discard: ..." lists what is lost.
 
 Steps with `--yes` (the first failure stops the run and the already done steps are printed):
@@ -329,7 +330,7 @@ Steps with `--yes` (the first failure stops the run and the already done steps a
   Without it: "not stopped (use --kill-procs)".
 - b. A non-empty `drop` template from the registry entry runs with `{db}` and `{name}` filled (whitespace split, no
   shell, cwd = repo root). A failure aborts, unless `--force`.
-- c. Deletes `<worktree>/.agentgc/task.env`, then `.agentgc` only if it is empty.
+- c. Deletes the supervisor's generated files (see "Supervisor"), then `<worktree>/.agentgc/task.env`, then `.agentgc` only if it is empty.
 - d. `git worktree remove <path>`; `--force` is passed to git only when you passed `--force`. If git refuses, the
   message is printed and `done` stops. The folder is never deleted by any other means.
 - e. `git branch -d <branch>` (`-D` with `--force`). If `-d` refuses (unmerged), a note is printed and the run continues.
@@ -338,6 +339,59 @@ Steps with `--yes` (the first failure stops the run and the already done steps a
 
 Never touched: anything outside the task folder, the main checkout, other tasks, remote branches. No recursive delete
 (`remove_dir_all`) exists in the command. If stdout closes during `--yes`, output goes silent but the steps still finish.
+
+## Supervisor (up/down/status/logs)
+
+```
+agentgc up      [--task NAME [--repo PATH]]
+agentgc down    [--task NAME [--repo PATH]] [--force]
+agentgc status  [--task NAME [--repo PATH]]
+agentgc logs NAME [--lines N] [--task NAME [--repo PATH]]
+agentgc restart NAME [--task NAME [--repo PATH]]
+agentgc task done NAME --yes [--stop-services]
+```
+
+Opt-in, per task. `task new` already writes `<worktree>/.agentgc/services.json`; `up` runs those services.
+Run the commands inside a task worktree, or name the task with `--task` (read from `<repo>/.agentgc/tasks/<name>.json`,
+with the same path guard as `task done`).
+
+- **`up`** starts `agentgc __supervise <worktree>` (hidden subcommand) as a detached background process
+  (Windows: `CREATE_NO_WINDOW | DETACHED_PROCESS`). It runs each service through `cmd /S /C` (Windows) or `sh -c`, with
+  the recorded `cwd` and the env from `.agentgc/task.env`. Every `cwd` must be a relative path that resolves inside the
+  worktree (no `..`, symlinks that leave it are refused); otherwise `up` fails before anything starts. Output of each service
+  goes to `.agentgc/logs/<name>.log` (the supervisor's own messages: `logs/supervisor.log`). `up` prints what started.
+- **One supervisor per task.** It holds an exclusive lock on `.agentgc/daemon.lock` (same lock layer as `run`; the OS frees
+  it when the holder dies). A second `up` prints "already running" and exits 0.
+- **State:** `.agentgc/daemon.json` (written to a temp file, then renamed): supervisor pid, start time and process name;
+  per service pid, start time, process name, restarts, state (`running`, `backoff`, `finished`, `failed`, `stopped`), port.
+- **Restart policy:** a service that exits with a non-zero code (or is killed) restarts after 1, 2, 4, 8, 8 s. A crash while
+  5 restarts sit inside the last 60 s marks it `failed`: no more retries. Exit code 0 is `finished`: no restart.
+  `restart NAME` writes the marker `.agentgc/restart.<name>`; the supervisor (polls every 500 ms) restarts that service and
+  clears its restart history, so it also revives a `failed` one.
+- **Logs** rotate at 5 MB: `<name>.log` becomes `<name>.log.1` (one old file, replaced next time). `logs NAME` prints the
+  tail (default 50 lines).
+- **Processes die with the supervisor.** Windows: each service runs in a Job Object with `KILL_ON_JOB_CLOSE` (crate
+  `windows-sys`, pinned `=0.61.2`, features `Win32_Foundation`, `Win32_Security`, `Win32_System_JobObjects`,
+  `Win32_System_Threading`). Unix: each service is its own process group; the group gets SIGTERM, then SIGKILL after 5 s
+  (crate `libc`, pinned `=0.2.191`, Unix only).
+- **`down`** creates `.agentgc/daemon.stop`. The supervisor sees it within 500 ms, stops its services (graceful where the
+  system has it, kill after 5 s; Windows has no graceful step, so it kills the job at once), removes `daemon.json` and the
+  marker, and exits. `down` waits up to 10 s. If the supervisor is still there, `down` signals the recorded pids: before every
+  signal the process is read again and must match pid + start time + process name from `daemon.json`; otherwise it is
+  refused. A pid without a recorded identity is never signaled. No hard kill without `--force`; on Windows a stop by pid
+  needs `--force`.
+- **`status`** shows whether the supervisor is alive (the lock decides) and per service: pid, state, running (identity
+  checked), restarts, port and URL (the `AGENTGC_ROUTE_<NAME>` route when there is one, else `http://127.0.0.1:<port>`).
+- **`task done`** refuses while the supervisor is alive (`--force` does not skip this). `--stop-services` stops it first, as
+  `down` does (its `--force` is passed on). `done --yes` also deletes the generated daemon files, each with `remove_file`
+  and only by known name: `daemon.json`, `daemon.json.tmp`, `daemon.lock`, `daemon.stop`, `restart.<name>`, `logs/*.log`,
+  `logs/*.log.1`; then `remove_dir` on `logs` (it stays when it holds anything else). Never `remove_dir_all`.
+- **`ps`** adds `supervised` to every pid listed in the task's `daemon.json` (supervisor and the service wrapper process).
+
+What it never does: install a system service, start at boot or login, open a network port or proxy traffic, start anything
+that `services.json` does not list, signal a pid it did not record itself or one whose identity changed, touch other tasks,
+or restart a service after `down`. Unix limit: when `down` has to stop a hung supervisor by pid, the services' process
+groups are not signaled as groups; only their recorded pids are.
 
 ## Queue for heavy commands (`run`)
 
