@@ -55,6 +55,8 @@
 
 <p align="center"><i>agentgc не запускает ИИ-агентов. Он готовит окружение вокруг них, запускает сервисы каждой задачи и убирает за ними.</i></p>
 
+<p align="center">Хотите сделать вручную? Читайте <a href="https://dev.to/ghost_wayne/parallel-ai-coding-agents-in-git-worktrees-how-to-stop-the-collisions-4gb">пошаговое руководство на dev.to</a> (на английском).</p>
+
 <br>
 
 <h2 align="center" id="features">Возможности</h2>

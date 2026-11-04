@@ -55,6 +55,8 @@
 
 <p align="center"><i>agentgc does not start AI agents. It prepares the environment around them, runs the services of each task, and cleans up afterwards.</i></p>
 
+<p align="center">Prefer to do it by hand? Read the <a href="https://dev.to/ghost_wayne/parallel-ai-coding-agents-in-git-worktrees-how-to-stop-the-collisions-4gb">step-by-step guide on dev.to</a>.</p>
+
 <br>
 
 <h2 align="center" id="features">Features</h2>
