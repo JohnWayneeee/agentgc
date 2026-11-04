@@ -147,8 +147,22 @@ pub fn run_doctor(root: &Path, config: Option<&Path>) -> Result<Vec<Hit>, String
     Ok(hits)
 }
 
+/// Work tree root by `git rev-parse --show-toplevel` (works in a linked worktree, where `.git` is a file).
+/// Falls back to `find_repo_root` when git cannot tell.
+fn resolve_root(start: &Path) -> Result<PathBuf, String> {
+    if let Ok(o) = task::git(start, &["rev-parse", "--show-toplevel"]) {
+        if o.status.success() {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !s.is_empty() {
+                return Ok(PathBuf::from(s));
+            }
+        }
+    }
+    task::find_repo_root(start)
+}
+
 pub fn cmd_doctor(a: &DoctorArgs) -> Result<(), String> {
-    let root = task::find_repo_root(a.repo.as_deref().unwrap_or(Path::new(".")))?;
+    let root = resolve_root(a.repo.as_deref().unwrap_or(Path::new(".")))?;
     let hits = run_doctor(&root, a.config.as_deref())?;
     for h in &hits {
         outln!("{}:{}  {} {}  {}", h.file, h.line, h.kind, h.what, h.text);
@@ -217,5 +231,40 @@ mod tests {
         std::fs::write(&t, "PORT=3300").unwrap();
         assert!(read_text(&t).is_some());
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn resolves_root_in_linked_worktree() {
+        use std::process::Command;
+        let git = |dir: &Path, args: &[&str]| {
+            let o = Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
+            assert!(o.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&o.stderr));
+        };
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let d = std::env::temp_dir().join(format!("agentgc_doctor_wt_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let main = d.join("main");
+        let wt = d.join("wt");
+        std::fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "-b", "main"]);
+        std::fs::write(main.join("a.env"), "PORT=3300
+").unwrap();
+        git(&main, &["add", "."]);
+        git(&main, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "init"]);
+        git(&main, &["worktree", "add", wt.to_str().unwrap(), "-b", "feat"]);
+        assert!(wt.join(".git").is_file());
+        assert!(task::find_repo_root(&wt).is_err() || task::find_repo_root(&wt).unwrap() != wt);
+        let sub = wt.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        for start in [&wt, &sub] {
+            let root = resolve_root(start).unwrap();
+            assert_eq!(root.canonicalize().unwrap(), wt.canonicalize().unwrap());
+        }
+        let hits = run_doctor(&resolve_root(&wt).unwrap(), None).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].file, "a.env");
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
