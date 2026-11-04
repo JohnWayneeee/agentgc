@@ -25,6 +25,18 @@ Missing paths and unreadable files are skipped. Env vars are expanded:
 `%USERPROFILE%`, `%LOCALAPPDATA%`, `%APPDATA%`, `%TEMP%` (Windows), `$HOME`, `$XDG_CACHE_HOME` (Unix), and `~`.
 A path with an unset variable is skipped.
 
+## Orphan worktrees
+
+```
+agentgc worktrees [--root PATH]... [--depth N] [--json]
+```
+
+Finds directories whose `.git` is a file with `gitdir: <path>` and `<path>` no longer exists.
+Git does not track them, so `git status` fails there. Default root: current directory. Default depth: 6.
+Skips `node_modules`, `.git`, `target`, `.next`, `.venv`. Does not follow symlinks.
+Per orphan: total size, `node_modules` size, file count (without node_modules), age of the newest file, missing gitdir.
+`worktrees` never deletes anything.
+
 ## Rules format
 
 Built-in rules live in `rules/default.toml`.
