@@ -30,6 +30,9 @@ pub struct ProcInfo {
     pub cwd: Option<PathBuf>,
     pub rss_bytes: u64,
     pub cpu_percent: f32,
+    pub parent: Option<u32>,
+    /// Seconds since the epoch. Part of the identity check before a stop.
+    pub start_time: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -272,7 +275,7 @@ pub fn filter_groups(groups: Vec<Group>, all: bool, min_mb: u64, root: Option<&P
         .collect()
 }
 
-/// Read all processes. Two CPU samples, 1 second apart. Read-only: no signals sent.
+/// Read all processes. Two CPU samples, 1 second apart. Sends no signals.
 pub fn read_system() -> Vec<ProcInfo> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
     let kind = ProcessRefreshKind::nothing()
@@ -293,6 +296,8 @@ pub fn read_system() -> Vec<ProcInfo> {
             cwd: p.cwd().map(|c| c.to_path_buf()),
             rss_bytes: p.memory(),
             cpu_percent: p.cpu_usage(),
+            parent: p.parent().map(|x| x.as_u32()),
+            start_time: p.start_time(),
         })
         .collect()
 }
@@ -314,6 +319,8 @@ mod tests {
             cwd: cwd.map(|c| c.to_path_buf()),
             rss_bytes: mb * 1024 * 1024,
             cpu_percent: cpu,
+            parent: None,
+            start_time: 0,
         }
     }
 

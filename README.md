@@ -3,7 +3,7 @@
 Garbage collector for the disk junk that CLI coding agents and dev tools leave behind:
 package caches, browser downloads, agent sessions, temp files.
 
-**Status:** `scan`, `worktrees`, `ps`, `task list` and `run --status` are read-only. Only `task done --yes` and `clean` delete: `task done` a finished task folder (see below), `clean` the junk that `scan` lists, one item at a time (see `clean`). `run` writes only its own slot and info files.
+**Status:** `scan`, `worktrees`, `ps`, `task list` and `run --status` are read-only (`ps --stop --yes` stops idle processes, see below). Only `task done --yes` and `clean` delete: `task done` a finished task folder (see below), `clean` the junk that `scan` lists, one item at a time (see `clean`). `run` writes only its own slot and info files.
 
 ## Build
 
@@ -128,7 +128,35 @@ whole command-line words (a path counts by its file name only, so folder names n
 A dev server, language server, test or build with under 1% CPU over a 1 second sample is marked `idle`.
 Default `--min-mb` is 50. `--all` adds processes whose cwd cannot be read ("unknown cwd"). System folders and
 `agentgc` itself are skipped. Text after `--token`, `--key`, `--password`, `--secret` and values of `NAME=value`
-words are hidden. `ps` never stops, signals or changes anything; the hint line is text only.
+words are hidden. Without `--stop`, `ps` never stops, signals or changes anything; the hint line is text only.
+
+### Stop idle processes (`ps --stop`)
+
+```
+agentgc ps --stop [--yes] [--pid N]... [--task NAME] [--force] [--proc-rules FILE]
+```
+
+`--stop` conflicts with `--json` and ignores `--min-mb`, `--all` and `--root`. `--yes`, `--pid`, `--task`, `--force`
+work only with `--stop`.
+
+- **Candidates:** processes marked `idle` (under 1% CPU) of kind `dev-server`, `lsp`, `test` or `build`, with a
+  readable cwd outside system folders. Never `agent`, `db` or `other`. Never `agentgc` or any process in its parent chain.
+  `--task NAME` keeps only processes whose task root folder (nearest `.git`, else the cwd) has this name, any case.
+- **Dry run is the default.** It lists pid, kind, name, cwd, CPU % and memory, then prints
+  `dry-run: nothing stopped`. Command lines are not printed, so secrets stay hidden.
+- **`--yes` in a terminal:** asks `Stop pid N name? [y/N/q]` for each candidate. Only `y` stops it; `q` or end of
+  input quits. `--pid` limits which processes are asked.
+- **`--yes` without a terminal:** only pids named with `--pid` are stopped. An unknown or non-candidate pid is an
+  error and nothing is stopped. Without `--pid` it is an error too.
+- **Pid reuse guard:** right before the signal the process is read again. If pid, start time, name or cwd differ from
+  what was shown, it is refused and not signaled.
+- **Graceful first:** a terminate signal, then up to 3 s of waiting. On Windows a graceful terminate does not exist:
+  `ps --stop --yes` prints `use --force` and stops nothing. `--force` is the hard kill (on Linux and macOS it skips
+  the graceful step too). Processes still running after the wait are reported.
+- **Summary:** stopped, still running, refused, memory freed (the RSS shown before the stop).
+
+All signals go through the `Killer` trait in `src/proc_kill.rs`; `task done --kill-procs` uses the same code.
+Tests use a fake and never signal a real process.
 
 ## Task environments (`task`)
 

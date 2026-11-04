@@ -1,6 +1,7 @@
 //! `agentgc task done`: the only command that deletes things. Safety first:
 //! read-only checks, dry run by default, refuse when in doubt.
 use crate::out::{self, outln};
+use crate::proc_kill::{wait_gone, Killer, SysKiller};
 use crate::ps::{self, KindRule, ProcInfo};
 use crate::scan;
 use crate::task::{self, Entry};
@@ -164,29 +165,20 @@ fn unsaved_commits(dir: &Path, branch: &str, base: &str) -> Result<u64, String> 
 /// Stop processes. Re-checks the cwd right before the signal. Waits up to 3 s.
 /// Returns the pids still alive.
 fn kill_procs(pids: &[u32], wt: &Path) -> Vec<u32> {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    kill_procs_with(&SysKiller, pids, wt)
+}
+
+fn kill_procs_with(k: &dyn Killer, pids: &[u32], wt: &Path) -> Vec<u32> {
     let self_pid = std::process::id();
-    let ids: Vec<Pid> = pids.iter().filter(|p| **p != self_pid).map(|p| Pid::from_u32(*p)).collect();
-    let kind = ProcessRefreshKind::nothing().with_cwd(UpdateKind::Always);
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(ProcessesToUpdate::Some(&ids), true, kind);
+    let ids: Vec<u32> = pids.iter().copied().filter(|p| *p != self_pid).collect();
     for id in &ids {
-        if let Some(p) = sys.process(*id) {
-            if p.cwd().map_or(false, |c| inside(c, wt)) {
-                p.kill();
+        if let Some(live) = k.read(*id) {
+            if live.cwd.as_deref().map_or(false, |c| inside(c, wt)) {
+                let _ = k.signal(*id, true);
             }
         }
     }
-    let mut alive = ids.clone();
-    for _ in 0..15 {
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&ids), true, kind);
-        alive.retain(|id| sys.process(*id).is_some());
-        if alive.is_empty() {
-            break;
-        }
-    }
-    alive.iter().map(|p| p.as_u32()).collect()
+    wait_gone(k, &ids, 3000)
 }
 
 fn tag(ok: bool) -> &'static str {
@@ -561,6 +553,8 @@ mod tests {
             cwd: cwd.map(PathBuf::from),
             rss_bytes: 0,
             cpu_percent: 0.0,
+            parent: None,
+            start_time: 0,
         }
     }
 

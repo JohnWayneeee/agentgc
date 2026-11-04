@@ -3,7 +3,9 @@ mod compose;
 mod deps;
 mod lock;
 mod out;
+mod proc_kill;
 mod ps;
+mod ps_stop;
 mod rules;
 mod run;
 mod scan;
@@ -78,7 +80,7 @@ enum Cmd {
         #[arg(long, default_value_t = 3)]
         dep_depth: usize,
     },
-    /// Show running processes grouped by task folder, with RAM. Read-only: stops nothing.
+    /// Show running processes grouped by task folder, with RAM. Stops nothing unless --stop --yes.
     Ps {
         /// Process kind rules (TOML). Overrides the built-in rules.
         #[arg(long)]
@@ -95,6 +97,22 @@ enum Cmd {
         /// Only groups under this path.
         #[arg(long)]
         root: Option<PathBuf>,
+        /// Stop idle dev-server, lsp, test and build processes. Dry run unless --yes.
+        /// Ignores --min-mb, --all and --root.
+        #[arg(long, conflicts_with = "json")]
+        stop: bool,
+        /// With --stop: really stop. Terminal: asks per process. Otherwise needs --pid.
+        #[arg(long, requires = "stop")]
+        yes: bool,
+        /// With --stop: only this pid. Repeatable. Must be a stop candidate.
+        #[arg(long = "pid", value_name = "N", requires = "stop")]
+        pid: Vec<u32>,
+        /// With --stop: only processes in the task folder with this name (case-insensitive).
+        #[arg(long, value_name = "NAME", requires = "stop")]
+        task: Option<String>,
+        /// With --stop: hard kill. Needed on Windows, where graceful stop is unsupported.
+        #[arg(long, requires = "stop")]
+        force: bool,
     },
     /// Isolated task environments for parallel agents (worktree, ports, db name, env file).
     Task {
@@ -184,13 +202,16 @@ fn run() -> Result<(), String> {
             }
             TaskCmd::List { repo, json } => task::cmd_list(repo, json),
         },
-        Cmd::Ps { proc_rules, json, min_mb, all, root } => {
+        Cmd::Ps { proc_rules, json, min_mb, all, root, stop, yes, pid, task, force } => {
             let text = match proc_rules {
                 Some(p) => std::fs::read_to_string(&p)
                     .map_err(|e| format!("cannot read {}: {e}", p.display()))?,
                 None => ps::DEFAULT_PROC_RULES.to_string(),
             };
             let rs = ps::parse_proc_rules(&text)?;
+            if stop {
+                return ps_stop::cmd_stop(&ps_stop::StopArgs { yes, pids: pid, task, force }, &rs);
+            }
             let procs = ps::read_system();
             let groups = ps::build_groups(&procs, &rs, std::process::id());
             let groups = ps::filter_groups(groups, all, min_mb, root.as_deref());
