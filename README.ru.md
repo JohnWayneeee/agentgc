@@ -290,7 +290,8 @@ agentgc init --global-skill           # плюс навык для всех ва
 <p align="center">
   Pull request'ы приветствуются. Сначала прочитайте <a href="CONTRIBUTING.md">CONTRIBUTING.md</a>:<br>
   изменения оцениваются по безопасности, а тесты используют только временные папки.<br>
-  О найденной проблеме безопасности сообщайте через вкладку Security, не в публичном issue. См. <a href="SECURITY.md">SECURITY.md</a>.
+  О найденной проблеме безопасности сообщайте через вкладку Security, не в публичном issue. См. <a href="SECURITY.md">SECURITY.md</a>.<br>
+  Изменения по версиям: <a href="CHANGELOG.md">CHANGELOG.md</a>.
 </p>
 
 <h2 align="center" id="support">Поддержка</h2>

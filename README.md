@@ -290,7 +290,8 @@ Tests pass on Windows, Linux and macOS, and the limits above apply. Run `clean -
 <p align="center">
   Pull requests are welcome. Read <a href="CONTRIBUTING.md">CONTRIBUTING.md</a> first:<br>
   changes are judged by safety, and tests use temp folders only.<br>
-  Report a safety bug through the Security tab, not a public issue. See <a href="SECURITY.md">SECURITY.md</a>.
+  Report a safety bug through the Security tab, not a public issue. See <a href="SECURITY.md">SECURITY.md</a>.<br>
+  Changes by version: <a href="CHANGELOG.md">CHANGELOG.md</a>.
 </p>
 
 <h2 align="center" id="support">Support</h2>
