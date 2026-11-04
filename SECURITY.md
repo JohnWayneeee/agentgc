@@ -21,10 +21,10 @@ Describe the command, the config or rules file, the operating system and what ha
 ## What to expect
 
 There is one maintainer. We aim to answer within 7 days and to fix confirmed safety bugs before any other work.
-There are no tagged releases yet. Fixes land on `main`.
+The latest tagged release and `main` get fixes. Older releases do not.
 
 ## Safe use
 
 - Run `scan` and read every path before `clean`. Use `--dry-run` first.
 - Do not point `clean` at a rules file you did not read.
-- Linux and macOS code paths exist but are not tested yet. Test on a throwaway folder first.
+- Tests pass on Windows, Linux and macOS in CI, but the full flow was run by hand on Windows only. On Linux and macOS, test on a throwaway folder first.

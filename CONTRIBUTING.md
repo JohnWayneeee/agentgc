@@ -32,8 +32,8 @@ cargo test
 
 ## Platforms
 
-Windows is the tested platform. Linux and macOS code paths exist but have not been built or run. Help is welcome:
-build on those systems, run `cargo test`, and open an issue with the result.
+GitHub Actions builds and tests on Windows, Linux and macOS. The full flow was run by hand on Windows only. Help is
+welcome: run agentgc on Linux or macOS and open an issue with the result.
 
 ## Privacy
 

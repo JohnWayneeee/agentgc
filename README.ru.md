@@ -13,7 +13,9 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/JohnWayneeee/agentgc?style=flat-square"></a>
   <img alt="Built with Rust" src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust">
-  <img alt="Platform: Windows tested" src="https://img.shields.io/badge/platform-Windows%20tested-blue?style=flat-square">
+  <a href="https://github.com/JohnWayneeee/agentgc/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/JohnWayneeee/agentgc?style=flat-square"></a>
+  <a href="https://github.com/JohnWayneeee/agentgc/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/JohnWayneeee/agentgc/ci.yml?branch=main&style=flat-square&label=CI"></a>
+  <img alt="Platforms: Windows, Linux, macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square">
   <a href="https://github.com/JohnWayneeee/agentgc/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/JohnWayneeee/agentgc?style=flat-square"></a>
   <a href="https://github.com/JohnWayneeee/agentgc/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/JohnWayneeee/agentgc?style=flat-square"></a>
   <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square"></a>
@@ -77,8 +79,12 @@
 <h2 align="center" id="quick-start">Быстрый старт</h2>
 
 <p align="center">
-  Соберите из исходников. agentgc написан на Rust.
+  Скачайте сборку для своей системы или соберите из исходников.
 </p>
+
+Скачайте архив для Windows, Linux или macOS (Apple Silicon) из [последнего релиза](https://github.com/JohnWayneeee/agentgc/releases/latest). Распакуйте и добавьте `agentgc` в `PATH`. Сверьте сумму с файлом `.sha256` рядом с архивом.
+
+Или соберите из исходников. agentgc написан на Rust:
 
 ```sh
 cargo install --path .
@@ -207,7 +213,8 @@ agentgc init --global-skill           # плюс навык для всех ва
 - agentgc не открывает сетевой порт, не ставит системный сервис и не запускается при старте системы или входе.
 
 > [!WARNING]
-> Проверялся на Windows. Пути кода для Linux и macOS есть, но их ни разу не собирали и не запускали.
+> Тесты проходят на Windows, Linux и macOS в GitHub Actions. Полный сценарий вручную прогоняли только на Windows. О проблемах на Linux и macOS пишите в issue.
+> Бинарники релиза не подписаны. Windows SmartScreen или macOS Gatekeeper могут предупредить при первом запуске.
 > На Windows для `ps --stop` нужен `--force`, потому что в agentgc там нет плавной остановки.
 > Супервизор работает по выбору и отдельно для каждой задачи. Сервисы запускаются только по команде `up`.
 
@@ -263,9 +270,9 @@ agentgc init --global-skill           # плюс навык для всех ва
 </details>
 
 <details>
-<summary><b>Безопасно ли на Windows?</b></summary>
+<summary><b>Безопасно ли это на моей системе?</b></summary>
 
-Проверено на Windows, и действуют ограничения выше. Сначала запустите `clean --dry-run`, а для остановки используйте `--force`.
+Тесты проходят на Windows, Linux и macOS, и действуют ограничения выше. Сначала запустите `clean --dry-run`, а для остановки используйте `--force`.
 
 </details>
 

@@ -13,7 +13,9 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/JohnWayneeee/agentgc?style=flat-square"></a>
   <img alt="Built with Rust" src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust">
-  <img alt="Platform: Windows tested" src="https://img.shields.io/badge/platform-Windows%20tested-blue?style=flat-square">
+  <a href="https://github.com/JohnWayneeee/agentgc/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/JohnWayneeee/agentgc?style=flat-square"></a>
+  <a href="https://github.com/JohnWayneeee/agentgc/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/JohnWayneeee/agentgc/ci.yml?branch=main&style=flat-square&label=CI"></a>
+  <img alt="Platforms: Windows, Linux, macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square">
   <a href="https://github.com/JohnWayneeee/agentgc/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/JohnWayneeee/agentgc?style=flat-square"></a>
   <a href="https://github.com/JohnWayneeee/agentgc/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/JohnWayneeee/agentgc?style=flat-square"></a>
   <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square"></a>
@@ -77,8 +79,12 @@
 <h2 align="center" id="quick-start">Quick start</h2>
 
 <p align="center">
-  Build it from source. agentgc is a Rust project.
+  Download a build for your system, or build it from source.
 </p>
+
+Download the archive for Windows, Linux or macOS (Apple Silicon) from the [latest release](https://github.com/JohnWayneeee/agentgc/releases/latest). Unpack it and put `agentgc` on your `PATH`. Check the `.sha256` file next to the archive.
+
+Or build it from source. agentgc is a Rust project:
 
 ```sh
 cargo install --path .
@@ -207,7 +213,8 @@ The rules tell the agent which commands are read-only, how to read its ports and
 - agentgc opens no network port, installs no system service and does not start at boot or login.
 
 > [!WARNING]
-> Windows is the tested platform. Linux and macOS code paths exist, but they have not been built or run yet.
+> Tests pass on Windows, Linux and macOS in GitHub Actions. The full flow was run by hand on Windows only. Report problems on Linux and macOS in an issue.
+> The release binaries are not code signed. Windows SmartScreen or macOS Gatekeeper can warn on first start.
 > On Windows, `ps --stop` needs `--force`, because agentgc has no graceful stop there.
 > The supervisor is opt-in and per task. Services start only when you run `up`.
 
@@ -263,9 +270,9 @@ No. agentgc never runs docker or starts containers. The compose file is optional
 </details>
 
 <details>
-<summary><b>Is it safe on Windows?</b></summary>
+<summary><b>Is it safe to use on my system?</b></summary>
 
-It is tested on Windows, and the limits above apply. Run `clean --dry-run` first, and use `--force` for stops.
+Tests pass on Windows, Linux and macOS, and the limits above apply. Run `clean --dry-run` first, and use `--force` for stops.
 
 </details>
 
