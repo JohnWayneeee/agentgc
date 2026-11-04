@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/banner-small.jpg" alt="agentgc: run many AI coding agents in parallel without the mess. Isolated tasks with their own worktree, port and database." width="100%">
+</p>
+
 # agentgc
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
