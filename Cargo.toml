@@ -1,0 +1,15 @@
+[package]
+name = "agentgc"
+version = "0.1.0"
+edition = "2021"
+description = "Read-only scanner for disk junk left by CLI coding agents and dev tools"
+
+[[bin]]
+name = "agentgc"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"

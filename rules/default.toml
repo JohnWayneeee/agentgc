@@ -1,0 +1,119 @@
+# safety: "safe" = regrows by itself, "ask" = needs the owner's decision.
+# clean_cmd is a hint only. agentgc never runs it.
+
+[[rule]]
+id = "uv-cache"
+name = "uv cache"
+paths = ["%LOCALAPPDATA%\\uv\\cache", "$XDG_CACHE_HOME/uv", "~/.cache/uv"]
+safety = "safe"
+note = "Downloaded wheels and built packages. Regrows on next install."
+clean_cmd = "uv cache clean"
+
+[[rule]]
+id = "npm-cache"
+name = "npm cache"
+paths = ["%LOCALAPPDATA%\\npm-cache", "~/.npm"]
+safety = "safe"
+note = "Package tarballs. Regrows on next install."
+clean_cmd = "npm cache clean --force"
+
+[[rule]]
+id = "pip-cache"
+name = "pip cache"
+paths = ["%LOCALAPPDATA%\\pip\\cache", "$XDG_CACHE_HOME/pip", "~/.cache/pip"]
+safety = "safe"
+note = "Downloaded wheels. Regrows on next install."
+clean_cmd = "pip cache purge"
+
+[[rule]]
+id = "pnpm-store"
+name = "pnpm store"
+paths = ["%LOCALAPPDATA%\\pnpm", "~/.local/share/pnpm"]
+safety = "safe"
+note = "Content-addressable package store. Projects relink on next install."
+clean_cmd = "pnpm store prune"
+
+[[rule]]
+id = "bun-cache"
+name = "bun cache"
+paths = ["~/.bun/install/cache"]
+safety = "safe"
+note = "Package cache. Regrows on next install."
+clean_cmd = "bun pm cache rm"
+
+[[rule]]
+id = "playwright-browsers"
+name = "Playwright browsers"
+paths = ["%LOCALAPPDATA%\\ms-playwright", "~/.cache/ms-playwright"]
+safety = "safe"
+note = "Downloaded browser builds. Re-download with playwright install."
+
+[[rule]]
+id = "puppeteer"
+name = "Puppeteer browsers"
+paths = ["~/.cache/puppeteer"]
+safety = "safe"
+note = "Downloaded Chrome builds. Re-downloaded on demand."
+
+[[rule]]
+id = "huggingface"
+name = "Hugging Face cache"
+paths = ["~/.cache/huggingface"]
+safety = "ask"
+note = "Model weights and datasets. Large downloads, slow to fetch again."
+clean_cmd = "huggingface-cli delete-cache"
+
+[[rule]]
+id = "gradle-caches"
+name = "Gradle caches"
+paths = ["~/.gradle/caches"]
+safety = "safe"
+note = "Dependency and build caches. Regrow on next build."
+
+[[rule]]
+id = "vscode-caches"
+name = "VS Code caches"
+paths = [
+  "%APPDATA%\\Code\\Cache",
+  "%APPDATA%\\Code\\CachedData",
+  "%APPDATA%\\Code\\CachedExtensionVSIXs",
+  "%APPDATA%\\Code\\Crashpad",
+]
+safety = "safe"
+note = "Editor caches and crash dumps. Close VS Code before cleaning."
+
+[[rule]]
+id = "codex-junk"
+name = "Codex junk"
+paths = ["~/.codex/.tmp", "~/.codex/cache", "~/.codex/archived_sessions"]
+safety = "safe"
+note = "Temp files, cache and archived sessions of Codex CLI."
+
+[[rule]]
+id = "gemini-cli"
+name = "Gemini CLI"
+paths = ["~/.gemini"]
+safety = "ask"
+note = "Settings, auth and history of Gemini CLI. Check before removing."
+
+[[rule]]
+id = "claude-projects"
+name = "Claude Code projects"
+paths = ["~/.claude/projects"]
+safety = "ask"
+note = "Session transcripts per project. Deleting loses resume history."
+
+[[rule]]
+id = "temp"
+name = "Temp"
+paths = ["%TEMP%"]
+safety = "safe"
+note = "System temp folder. Files in use cannot be removed."
+
+[[rule]]
+id = "docker-wsl"
+name = "Docker WSL disk"
+paths = ["%LOCALAPPDATA%\\Docker\\wsl"]
+safety = "ask"
+note = "Docker Desktop virtual disk. Prune first, then compact the vhdx."
+clean_cmd = "docker system prune -a --volumes"
