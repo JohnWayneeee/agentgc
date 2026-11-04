@@ -1,3 +1,4 @@
+mod deps;
 mod rules;
 mod scan;
 mod worktrees;
@@ -39,6 +40,9 @@ enum Cmd {
         /// Print JSON instead of a table.
         #[arg(long)]
         json: bool,
+        /// Also list dependency folders duplicated across worktrees of one repo.
+        #[arg(long)]
+        deps: bool,
     },
 }
 
@@ -72,17 +76,30 @@ fn run() -> Result<(), String> {
             }
             Ok(())
         }
-        Cmd::Worktrees { mut root, depth, json } => {
+        Cmd::Worktrees { mut root, depth, json, deps } => {
             if root.is_empty() {
                 root.push(PathBuf::from("."));
             }
-            let found = worktrees::find_orphans(&root, depth);
+            let sv = worktrees::survey(&root, depth);
+            let found = &sv.orphans;
             let total: u64 = found.iter().map(|o| o.bytes).sum();
+            let dups = if deps { Some(deps::duplicate_deps(&sv.members)) } else { None };
             if json {
-                let v = serde_json::json!({ "total_bytes": total, "items": found });
+                let mut v = serde_json::json!({
+                    "total_bytes": total,
+                    "items": found,
+                    "prunable": sv.prunable,
+                });
+                if let Some(d) = &dups {
+                    v["deps"] = serde_json::json!(d);
+                }
                 println!("{}", serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?);
             } else {
-                print_orphans(&found, total);
+                print_orphans(found, total);
+                print_prunable(&sv.prunable);
+                if let Some(d) = &dups {
+                    print_deps(d);
+                }
             }
             Ok(())
         }
@@ -109,6 +126,39 @@ fn print_orphans(found: &[worktrees::Orphan], total: u64) {
         );
     }
     println!("{:>10}  TOTAL ({} orphans). Nothing was deleted.", scan::human(total), found.len());
+}
+
+fn print_prunable(p: &[worktrees::Prunable]) {
+    println!();
+    if p.is_empty() {
+        println!("No prunable worktrees found.");
+        return;
+    }
+    println!("Prunable worktrees (git knows them, folder is gone):");
+    for x in p {
+        println!("  {}  repo: {}", x.name, x.repo);
+        println!("    missing: {}", x.missing_path);
+    }
+    println!("Hint (not run): {}   [{} prunable]", p[0].hint, p.len());
+}
+
+fn print_deps(d: &[deps::RepoDeps]) {
+    println!();
+    if d.is_empty() {
+        println!("No repo with 2 or more worktrees.");
+        return;
+    }
+    for r in d {
+        println!("{}  ({} members, {})", r.repo, r.member_count, scan::human(r.total_bytes));
+        for m in &r.members {
+            let parts: Vec<String> =
+                m.deps.iter().map(|x| format!("{} {}", x.dir, scan::human(x.bytes))).collect();
+            let parts = if parts.is_empty() { "-".to_string() } else { parts.join(", ") };
+            let tag = if m.orphan { " [orphan]" } else { "" };
+            println!("  {:>10}  {}{}  {}", scan::human(m.total_bytes), m.path, tag, parts);
+        }
+        println!("  {} copies of dependencies; a shared store (for example pnpm) can cut this", r.copies);
+    }
 }
 
 fn print_table(findings: &[scan::Finding], total: u64) {

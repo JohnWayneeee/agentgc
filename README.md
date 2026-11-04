@@ -37,6 +37,24 @@ Skips `node_modules`, `.git`, `target`, `.next`, `.venv`. Does not follow symlin
 Per orphan: total size, `node_modules` size, file count (without node_modules), age of the newest file, missing gitdir.
 `worktrees` never deletes anything.
 
+### Prunable worktrees
+
+Always printed in a separate section (and under `prunable` in `--json`). A directory with a `.git` folder is a main repo.
+`agentgc` reads each `<repo>/.git/worktrees/*/gitdir`. If the parent folder of the path inside is gone, git still
+knows the worktree but its folder does not exist. Per entry: name, repo, missing path, hint `git worktree prune`.
+The hint is text only. `agentgc` never runs it.
+
+### Duplicate dependencies (`--deps`)
+
+```
+agentgc worktrees --root PATH --deps [--json]
+```
+
+Groups worktrees by repo (main checkout included, orphans marked `[orphan]`). For each repo with 2 or more members it
+lists the size of `node_modules`, `.venv`, `vendor/bundle`, `target`, `.next` at each member root, biggest member first,
+and a note: N copies of dependencies; a shared store (for example pnpm) can cut this. With `--json` the same data
+is under `deps`. Read-only.
+
 ## Rules format
 
 Built-in rules live in `rules/default.toml`.

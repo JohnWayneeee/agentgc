@@ -84,11 +84,98 @@ fn measure(dir: &Path) -> Measure {
     m
 }
 
+#[derive(Debug, Serialize, PartialEq)]
+pub struct Prunable {
+    pub name: String,
+    pub repo: String,
+    pub missing_path: String,
+    pub hint: String,
+}
+
+/// A directory that belongs to a repo: main checkout, healthy worktree or orphan.
+#[derive(Debug, PartialEq)]
+pub struct Member {
+    pub path: PathBuf,
+    pub repo: PathBuf,
+    pub orphan: bool,
+}
+
+#[derive(Default)]
+pub struct Survey {
+    pub orphans: Vec<Orphan>,
+    pub prunable: Vec<Prunable>,
+    pub members: Vec<Member>,
+}
+
+/// First line of the `dir/.git` FILE after `gitdir:`. None if `.git` is not a file.
+fn gitdir_target(dir: &Path) -> Option<String> {
+    let git = dir.join(".git");
+    if !fs::symlink_metadata(&git).ok()?.is_file() {
+        return None;
+    }
+    let bytes = fs::read(&git).ok()?;
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]).into_owned();
+    let t = text.lines().next()?.strip_prefix("gitdir:")?.trim().to_string();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+/// `<repo>/.git/worktrees/<name>` -> `<repo>`. Lexical, touches nothing.
+fn repo_of_gitdir(dir: &Path, target: &str) -> Option<PathBuf> {
+    let p = Path::new(target);
+    let full = if p.is_absolute() { p.to_path_buf() } else { dir.join(p) };
+    let wt = full.parent()?;
+    if wt.file_name()? != "worktrees" {
+        return None;
+    }
+    let git = wt.parent()?;
+    if git.file_name()? != ".git" {
+        return None;
+    }
+    Some(git.parent()?.to_path_buf())
+}
+
+/// Worktrees git knows whose folder is gone. Reads `<repo>/.git/worktrees/*/gitdir`. Read-only.
+pub fn prunable_of(repo: &Path) -> Vec<Prunable> {
+    let mut out = Vec::new();
+    let Ok(rd) = fs::read_dir(repo.join(".git").join("worktrees")) else { return out };
+    for e in rd.flatten() {
+        let gd = e.path();
+        let Ok(bytes) = fs::read(gd.join("gitdir")) else { continue };
+        let text = String::from_utf8_lossy(&bytes[..bytes.len().min(4096)]).into_owned();
+        let Some(line) = text.lines().next().map(str::trim).filter(|l| !l.is_empty()) else {
+            continue;
+        };
+        let p = Path::new(line);
+        let full = if p.is_absolute() { p.to_path_buf() } else { gd.join(p) };
+        let Some(parent) = full.parent() else { continue };
+        if !parent.exists() {
+            out.push(Prunable {
+                name: e.file_name().to_string_lossy().into_owned(),
+                repo: repo.display().to_string(),
+                missing_path: line.to_string(),
+                hint: "git worktree prune".to_string(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.repo.cmp(&b.repo).then_with(|| a.name.cmp(&b.name)));
+    out
+}
+
 /// Walk `roots` down to `depth` levels and return orphan worktrees, biggest first.
+#[cfg(test)]
 pub fn find_orphans(roots: &[PathBuf], depth: usize) -> Vec<Orphan> {
+    survey(roots, depth).orphans
+}
+
+/// One walk: orphans, prunable worktrees and repo members. Read-only.
+pub fn survey(roots: &[PathBuf], depth: usize) -> Survey {
     let now = SystemTime::now();
     let mut seen: HashSet<PathBuf> = HashSet::new();
-    let mut out = Vec::new();
+    let mut sv = Survey::default();
     for root in roots {
         let mut stack = vec![(root.clone(), 0usize)];
         while let Some((dir, level)) = stack.pop() {
@@ -101,7 +188,7 @@ pub fn find_orphans(roots: &[PathBuf], depth: usize) -> Vec<Orphan> {
             }
             if let Some(missing) = missing_gitdir(&dir) {
                 let m = measure(&dir);
-                out.push(Orphan {
+                sv.orphans.push(Orphan {
                     path: dir.display().to_string(),
                     bytes: m.bytes,
                     node_modules_bytes: m.nm_bytes,
@@ -109,9 +196,20 @@ pub fn find_orphans(roots: &[PathBuf], depth: usize) -> Vec<Orphan> {
                     newest_age_days: m
                         .newest
                         .map(|t| now.duration_since(t).map(|d| d.as_secs() / 86400).unwrap_or(0)),
-                    missing_gitdir: missing,
+                    missing_gitdir: missing.clone(),
                 });
+                if let Some(repo) = repo_of_gitdir(&dir, &missing) {
+                    sv.members.push(Member { path: dir.clone(), repo, orphan: true });
+                }
                 continue;
+            }
+            if let Some(t) = gitdir_target(&dir) {
+                if let Some(repo) = repo_of_gitdir(&dir, &t) {
+                    sv.members.push(Member { path: dir.clone(), repo, orphan: false });
+                }
+            } else if fs::symlink_metadata(dir.join(".git")).map_or(false, |m| m.is_dir()) {
+                sv.prunable.extend(prunable_of(&dir));
+                sv.members.push(Member { path: dir.clone(), repo: dir.clone(), orphan: false });
             }
             if level >= depth {
                 continue;
@@ -130,8 +228,9 @@ pub fn find_orphans(roots: &[PathBuf], depth: usize) -> Vec<Orphan> {
             }
         }
     }
-    out.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
-    out
+    sv.orphans.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.path.cmp(&b.path)));
+    sv.prunable.sort_by(|a, b| a.repo.cmp(&b.repo).then_with(|| a.name.cmp(&b.name)));
+    sv
 }
 
 #[cfg(test)]
@@ -208,6 +307,39 @@ mod tests {
         orphan(&deep, "deep");
         assert!(find_orphans(&[r.clone()], 6).len() == 1); // only "deep"
         assert!(find_orphans(&[r.clone()], 2).is_empty());
+        let _ = fs::remove_dir_all(&r);
+    }
+
+    #[test]
+    fn prunable_and_healthy() {
+        let r = tmp("prune");
+        let repo = r.join("repo");
+        fs::create_dir_all(repo.join(".git/worktrees/x")).unwrap();
+        fs::create_dir_all(repo.join(".git/worktrees/ok")).unwrap();
+        let gone = r.join("gone-folder").join("x");
+        let gd = repo.join(".git/worktrees/x/gitdir");
+        fs::write(&gd, format!("{}\n", gone.join(".git").display())).unwrap();
+        let live = r.join("live");
+        fs::create_dir_all(&live).unwrap();
+        fs::write(
+            repo.join(".git/worktrees/ok/gitdir"),
+            format!("{}\n", live.join(".git").display()),
+        )
+        .unwrap();
+        fs::write(
+            live.join(".git"),
+            format!("gitdir: {}\n", repo.join(".git/worktrees/ok").display()),
+        )
+        .unwrap();
+        let sv = survey(&[r.clone()], 6);
+        assert_eq!(sv.prunable.len(), 1);
+        assert_eq!(sv.prunable[0].name, "x");
+        assert_eq!(sv.prunable[0].hint, "git worktree prune");
+        assert!(sv.prunable[0].missing_path.contains("gone-folder"));
+        assert!(sv.orphans.is_empty());
+        assert_eq!(sv.members.len(), 2); // main + live
+        assert!(sv.members.iter().any(|m| m.path == live && m.repo == repo));
+        assert!(gd.exists()); // nothing modified
         let _ = fs::remove_dir_all(&r);
     }
 }
