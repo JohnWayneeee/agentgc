@@ -2,6 +2,8 @@ mod deps;
 mod ps;
 mod rules;
 mod scan;
+mod task;
+mod task_config;
 mod worktrees;
 
 use clap::{Parser, Subcommand};
@@ -66,6 +68,40 @@ enum Cmd {
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Isolated task environments for parallel agents (worktree, ports, db name, env file).
+    Task {
+        #[command(subcommand)]
+        cmd: TaskCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum TaskCmd {
+    /// Create a task environment. Dry run unless --yes.
+    New {
+        /// Task name: lowercase letters, digits, '-' and '_'.
+        name: String,
+        /// Repo to work in. Default: current directory.
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Config file. Default: agentgc.task.toml in the repo root.
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Run the db create command and setup commands (no shell).
+        #[arg(long)]
+        run_setup: bool,
+        /// Execute the plan. Without it nothing changes.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// List registered tasks with status (ok, missing, dirty). Read-only.
+    List {
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Print JSON instead of text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() -> ExitCode {
@@ -81,6 +117,12 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.cmd {
+        Cmd::Task { cmd } => match cmd {
+            TaskCmd::New { name, repo, config, run_setup, yes } => {
+                task::cmd_new(&task::NewArgs { name, repo, config, run_setup, yes })
+            }
+            TaskCmd::List { repo, json } => task::cmd_list(repo, json),
+        },
         Cmd::Ps { proc_rules, json, min_mb, all, root } => {
             let text = match proc_rules {
                 Some(p) => std::fs::read_to_string(&p)

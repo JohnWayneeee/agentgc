@@ -74,6 +74,62 @@ Default `--min-mb` is 50. `--all` adds processes whose cwd cannot be read ("unkn
 `agentgc` itself are skipped. Text after `--token`, `--key`, `--password`, `--secret` and values of `NAME=value`
 words are hidden. `ps` never stops, signals or changes anything; the hint line is text only.
 
+## Task environments (`task`)
+
+```
+agentgc task new NAME [--repo PATH] [--config FILE] [--run-setup] [--yes]
+agentgc task list [--repo PATH] [--json]
+```
+
+Parallel agents each need an isolated environment: own worktree, ports, database name, queue/cache prefix.
+`task new` builds it from a declarative file `agentgc.task.toml` in the repo root (`--config FILE` overrides).
+Every field is optional.
+
+```toml
+[worktree]
+dir = "worktrees"          # repo-local folder for task worktrees
+branch = "{name}"          # branch template
+base = "main"              # branch to start from
+[copy]
+files = [".env", ".env.local"]   # copied from the main checkout when present
+[ports]
+names = ["web", "api"]
+range = [3100, 3999]
+[db]
+name = "{repo}_{name}"     # a NAME only; agentgc never talks to a database server
+create = ""                # optional command template, for example "createdb {db}"
+drop = ""                  # stored for the future `done`, never run by `new`
+[env]
+TASK_ID = "{name}"
+PREFIX = "{name}_"         # queue names, cache keys, test storage paths
+[env.dynamic]
+# values may use {name} {repo} {db} {port.web} {port.api}
+DATABASE_URL = "postgres://localhost/{db}"
+[setup]
+commands = []              # for example ["pnpm install"]
+```
+
+Variables: `{name}` (lowercase letters, digits, `-`, `_`; anything else is an error), `{repo}` (repo folder name,
+sanitized), `{db}`, `{port.<name>}`.
+
+**Dry run is the default.** `task new NAME` prints the plan (worktree path and branch, files to copy, ports, db name,
+env file, commands) and changes nothing. `--yes` executes it:
+
+1. `git worktree add -b <branch> <path> <base>` through the `git` CLI (no shell).
+2. Copies the listed files that exist. Never overwrites.
+3. Picks for each port the first free one in the range: a TCP bind on 127.0.0.1 works and no other registered task holds it.
+4. Writes `<worktree>/.agentgc/task.env` (`TASK_ID`, `PREFIX`, `DB_NAME`, `PORT_<NAME>`, `[env]`, `[env.dynamic]`).
+5. Writes the registry entry `<repo>/.agentgc/tasks/<name>.json`.
+
+`create` and `setup.commands` run only with `--run-setup`: one by one, split by whitespace (no shell, no quotes),
+cwd = the worktree, stop at the first failure. Otherwise they are printed as "not run". The plan hides `user:pass@`
+in URLs and values of keys that contain SECRET, TOKEN, PASSWORD or KEY. A hint appears when the worktree folder or
+`.agentgc/` is not git-ignored; `agentgc` never edits `.gitignore`.
+
+`task list` is read-only. Per task: name, path, branch, ports, db, age in days, status `ok`, `missing` (folder gone),
+`dirty` (`git status --porcelain` prints something) or `unknown` (git failed).
+`task new` and `task list` never delete anything.
+
 ## Rules format
 
 Built-in rules live in `rules/default.toml`.
