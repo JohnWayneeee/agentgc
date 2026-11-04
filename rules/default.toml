@@ -1,5 +1,8 @@
 # safety: "safe" = regrows by itself, "ask" = needs the owner's decision.
 # clean_cmd is a hint only. agentgc never runs it.
+# Every rule that can hold user data (sessions, accounts, models, VM disks) must be "ask".
+# Rule: browser profiles are never in the list. A browser profile holds logins, cookies
+# and history. Never add a rule for a browser profile.
 
 [[rule]]
 id = "uv-cache"
@@ -86,8 +89,8 @@ note = "Editor caches and crash dumps. Close VS Code before cleaning."
 id = "codex-junk"
 name = "Codex junk"
 paths = ["~/.codex/.tmp", "~/.codex/cache", "~/.codex/archived_sessions"]
-safety = "safe"
-note = "Temp files, cache and archived sessions of Codex CLI."
+safety = "ask"
+note = "Temp files, cache and archived sessions of Codex CLI. Sessions are user data."
 
 [[rule]]
 id = "gemini-cli"

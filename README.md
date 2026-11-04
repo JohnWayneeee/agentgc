@@ -3,7 +3,7 @@
 Garbage collector for the disk junk that CLI coding agents and dev tools leave behind:
 package caches, browser downloads, agent sessions, temp files.
 
-**Status:** `scan`, `worktrees`, `ps`, `task list` and `run --status` are read-only. Only `task done --yes` deletes, and only a finished task folder (see below). `run` writes only its own slot and info files.
+**Status:** `scan`, `worktrees`, `ps`, `task list` and `run --status` are read-only. Only `task done --yes` and `clean` delete: `task done` a finished task folder (see below), `clean` the junk that `scan` lists, one item at a time (see `clean`). `run` writes only its own slot and info files.
 
 ## Build
 
@@ -58,6 +58,60 @@ does not enter `.git`, found dependency folders or other member roots (nested wo
 member), and does not follow symlinks. When 2 or more members hold dependencies, a note says: N members hold
 dependencies, X in total; a shared store (for example pnpm) can cut this. With `--json` the same data (`path` and
 `bytes` per folder) is under `deps`. Read-only.
+
+## Delete junk one item at a time (`clean`)
+
+```
+agentgc clean [--rules FILE] [--only ID]... [--yes-item ID]... [--allow-ask ID]... [--dry-run] [--log FILE]
+```
+
+**Never run it against paths you did not read.** Run `scan` and read every path first. Never put a browser profile or other app data into a bulk cleanup. `clean` asks about every item and sends "ask" items to the Recycle Bin.
+
+`clean` loads the same rules as `scan`, measures them, skips missing and 0 B items and sorts by size. An item is one
+rule with all its existing paths. For each item it shows: name, id, safety, every path with its size, the note, the 5
+largest direct children, the age of the newest file in days, and a warning for each running process whose cwd is inside
+the path (pid and name; nothing is stopped). Then it asks.
+
+### Confirmation model
+
+- `safe` item: `Delete this? [y/N/q]`. Only `y` deletes. Anything else (also an empty line) skips. `q` stops the run.
+  End of input stops the run.
+- `ask` item (may hold accounts, sessions, projects): you must TYPE THE ITEM ID exactly. Anything else skips
+  (`q` stops the run). It is moved to the Recycle Bin / Trash, never deleted for good. Space is freed only after you
+  empty the bin.
+- stdin is not a terminal (non-interactive): nothing is asked and nothing is deleted, except items named with
+  `--yes-item ID`. An `ask` item also needs `--allow-ask ID` for the same id, otherwise it is refused.
+  In a terminal these two flags are ignored: every item is asked.
+- `--only ID` limits the run to those ids (repeatable). An unknown id is an error.
+- `--dry-run` shows the same screens and the plan. It never asks to delete and never deletes.
+- `--log FILE` appends one JSON line per item: item id, action (`deleted`, `trashed`, `skipped`, `refused`),
+  bytes, skipped files, unix time. Dry runs write nothing.
+
+### Deletion
+
+`safe` items are deleted for good, path by path. Symlinks and junctions are never followed: the link itself is removed.
+A file that is locked or cannot be removed is skipped and counted. There are no retries and no force tricks.
+`clean` never kills a process and never runs `clean_cmd` (it stays a hint). The end of the run shows, per item, the
+bytes freed (size before minus size after), the locked files skipped, a total, and the free space of the system
+drive before and after when it can be read.
+
+### Hard guards
+
+Checked when the rules are loaded and again right before every deletion. The error names the rule and the path.
+No flag skips them.
+
+- The path must be absolute, with no `.` or `..` parts, with at least 4 components (drive or root counts, so a drive
+  root or `C:\Users` is impossible), and must not be the home dir or a parent of it. If the home dir cannot be found,
+  everything is refused.
+- Deny-list: a path with a component (any case) equal to `.ssh`, `.gnupg`, `.git`, `Documents`, `Desktop`, `Pictures`,
+  `Videos`, `Downloads`, `OneDrive`, `User Data`, `Profile`, `Profiles`, `Login Data`, `Cookies`, `Local Storage`,
+  `IndexedDB`, `Wallets`, `wallet`, `keystore`, `Application Support`, or starting with `Profile `, is refused.
+- A path that holds a `.git` entry inside is refused: it is a project, not a cache. The same deny-list names are
+  refused anywhere inside the path. A folder that cannot be read is refused too (it may hide such an entry).
+- `ask` items only go to the trash, never to permanent delete, whatever the flags.
+
+If one rule breaks a guard, the run stops before anything is touched; use `--only` to leave that rule out.
+The real removal sits behind a small `Remover` trait, so tests use a fake and never touch the real bin.
 
 ## Running processes (`ps`)
 
@@ -225,6 +279,8 @@ Idea credit: [heavy](https://github.com/mokevnin/heavy), a counting semaphore fo
 separate code; it adds Windows and named resources.
 
 ## SECURITY
+
+`clean` runs no command from the rules, but it deletes. Read every rule path first and use `--dry-run`.
 
 `agentgc.task.toml` can name commands: `db.create` and `setup.commands` run with `new --run-setup`, and `db.drop`
 (stored in the registry) runs with `done --yes`. They run as you, without a shell. Review the file like a Makefile.

@@ -1,3 +1,4 @@
+mod clean;
 mod deps;
 mod lock;
 mod out;
@@ -35,6 +36,28 @@ enum Cmd {
         /// Print JSON instead of a table.
         #[arg(long)]
         json: bool,
+    },
+    /// Delete the junk that `scan` lists, one item at a time, each with its own confirmation.
+    /// Never run it against paths you did not read.
+    Clean {
+        /// Rules file (TOML). Overrides the built-in rules.
+        #[arg(long)]
+        rules: Option<PathBuf>,
+        /// Only this rule id. Repeatable.
+        #[arg(long = "only", value_name = "ID")]
+        only: Vec<String>,
+        /// Non-interactive only: delete this item without asking. Repeatable.
+        #[arg(long = "yes-item", value_name = "ID")]
+        yes_item: Vec<String>,
+        /// Non-interactive only: also allow this `ask` item (moved to the bin). Repeatable.
+        #[arg(long = "allow-ask", value_name = "ID")]
+        allow_ask: Vec<String>,
+        /// Show the screens and the plan. Never asks to delete, never deletes.
+        #[arg(long)]
+        dry_run: bool,
+        /// Append one JSON line per item to this file.
+        #[arg(long)]
+        log: Option<PathBuf>,
     },
     /// Find orphan git worktrees (.git file points to a missing gitdir). Deletes nothing.
     Worktrees {
@@ -141,6 +164,9 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.cmd {
+        Cmd::Clean { rules, only, yes_item, allow_ask, dry_run, log } => {
+            clean::cmd_clean(&clean::CleanArgs { rules, only, yes_item, allow_ask, dry_run, log })
+        }
         Cmd::Run(a) => {
             let code = run::cmd_run(&a)?;
             if code != 0 {
