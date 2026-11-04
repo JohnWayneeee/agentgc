@@ -38,11 +38,15 @@ jobs:
           bin=agentgc; [ "${{ matrix.os }}" = windows-latest ] && bin=agentgc.exe
           cp "target/${{ matrix.target }}/release/$bin" README.md LICENSE "$name/"
           if [ "${{ matrix.ext }}" = zip ]; then 7z a "$name.zip" "$name" >/dev/null; else tar czf "$name.tar.gz" "$name"; fi
-          shasum -a 256 "$name.${{ matrix.ext }}" > "$name.${{ matrix.ext }}.sha256"
+          if command -v sha256sum >/dev/null; then sum=sha256sum; else sum="shasum -a 256"; fi
+          $sum "$name.${{ matrix.ext }}" > "$name.${{ matrix.ext }}.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
-          path: agentgc-*
+          path: |
+            agentgc-*.zip
+            agentgc-*.tar.gz
+            agentgc-*.sha256
 
   release:
     name: Publish release
