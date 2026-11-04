@@ -2,78 +2,115 @@
   <img src="docs/assets/banner-small.jpg" alt="agentgc: run many AI coding agents in parallel without the mess. Isolated tasks with their own worktree, port and database." width="100%">
 </p>
 
-# agentgc
+<h1 align="center">agentgc</h1>
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <b>Run many AI coding agents in parallel without the mess.</b><br>
+  Isolated task environments, a process supervisor and a safe cleanup<br>
+  for Claude Code, Codex and other CLI agents.
+</p>
 
-English | [Русский](README.ru.md)
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/github/license/JohnWayneeee/agentgc?style=flat-square"></a>
+  <img alt="Built with Rust" src="https://img.shields.io/badge/built%20with-Rust-orange?style=flat-square&logo=rust">
+  <img alt="Platform: Windows tested" src="https://img.shields.io/badge/platform-Windows%20tested-blue?style=flat-square">
+  <a href="https://github.com/JohnWayneeee/agentgc/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/JohnWayneeee/agentgc?style=flat-square"></a>
+  <a href="https://github.com/JohnWayneeee/agentgc/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/JohnWayneeee/agentgc?style=flat-square"></a>
+  <a href="CONTRIBUTING.md"><img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square"></a>
+  <a href="https://t.me/+pWGhdQdw5DZmYzYy"><img alt="Telegram channel" src="https://img.shields.io/badge/Telegram-channel-26A5E4?style=flat-square&logo=telegram"></a>
+</p>
 
-Run many AI coding agents in parallel without the mess: isolated task environments, a process supervisor, and a safe cleanup for Claude Code, Codex and other CLI agents.
+<p align="center">
+  <a href="#why-agentgc">Why</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#commands">Commands</a> ·
+  <a href="#teach-your-agent">Teach your agent</a> ·
+  <a href="#safety-by-design">Safety</a> ·
+  <a href="#faq">FAQ</a> ·
+  <a href="docs/reference.md">Reference</a> ·
+  <a href="README.ru.md">Русский</a>
+</p>
 
-## For you if
+<br>
 
-- You run several coding agents at once, each in its own git worktree.
-- Ports and database names collide between your tasks.
-- Your disk fills up with agent and dev tool leftovers.
-- Your machine freezes when five agents build at once.
+<h2 align="center" id="why-agentgc">Why agentgc</h2>
 
-## The problem
+<p align="center">
+  You run several coding agents at once, each in its own git worktree.<br>
+  Git keeps the files apart. It does not keep ports, databases, processes or disk space apart.
+</p>
 
-- Two tasks want the same port or database name.
-- Worktree folders outlive their git entry. `git status` fails in them.
-- Parallel tests and builds start at the same time and load the CPU.
-- Idle dev servers still hold RAM. `ps` shows which ones are idle.
+<div align="center">
 
-## What it does
-
-| Command | What it does |
+| Without agentgc | With agentgc |
 |---|---|
-| `agentgc scan` | Lists junk: package caches, downloaded browser builds, agent sessions, temp files. Read-only. |
-| `agentgc worktrees` | Finds orphan worktrees and duplicate dependency folders. Read-only. |
-| `agentgc clean` | Deletes listed junk one item at a time, with a confirmation for each item. |
-| `agentgc ps` | Shows which processes belong to which task, with their RAM. Read-only. |
-| `agentgc ps --stop` | Stops idle dev servers, language servers, tests and builds. Dry run by default. |
-| `agentgc task new` / `list` / `done` | Creates, lists and removes a task environment: worktree, ports, env file, database name. |
-| `[compose]` `[routes]` `[services]` | Config sections: a compose file per task, route URLs, and plain processes per task. |
-| `agentgc up` / `down` / `status` / `logs` / `restart` | Starts, stops, restarts and checks a task's services, and shows their logs. |
-| `agentgc run` | Queues heavy commands so only some run at once. Guards named exclusive resources. |
+| Two dev servers fight for the same port | Each task gets its own free ports |
+| Every agent writes to one shared database | Each task gets its own database name |
+| Five builds start at once and the machine freezes | Heavy commands take turns with `agentgc run` |
+| Finished task folders and caches fill the disk | `clean` removes junk item by item, `task done` removes a task safely |
+| Forgotten dev servers keep holding RAM | `ps --stop` stops the idle ones |
 
-Full reference: [docs/reference.md](docs/reference.md). It lists every flag and rule.
+</div>
 
-## Quick start
+<p align="center"><i>agentgc does not start AI agents. It prepares the environment around them, runs the services of each task, and cleans up afterwards.</i></p>
 
-### Build from source
+<br>
 
-agentgc is a Rust project.
+<h2 align="center" id="features">Features</h2>
 
-```
+<div align="center">
+
+| | |
+|---|---|
+| **Isolate** | One worktree, free ports, a database name and an env file per task. Optional compose file and `*.localhost` route per task. |
+| **Supervise** | `up`, `down`, `status`, `logs` and `restart` run plain processes per task. Opt-in, no system service, no network port. |
+| **Queue** | `run` lets heavy commands take turns and guards named exclusive resources, such as one phone or one browser profile. |
+| **Clean** | `scan` and `clean` remove junk one item at a time. `task done` removes a finished task. `ps --stop` stops idle servers. |
+
+</div>
+
+<br>
+
+<h2 align="center" id="quick-start">Quick start</h2>
+
+<p align="center">
+  Build it from source. agentgc is a Rust project.
+</p>
+
+```sh
 cargo install --path .
 ```
 
-or `cargo build --release` (binary: `target/release/agentgc`).
+Or run `cargo build --release` and use `target/release/agentgc`.
 
-### Example
+Put the task settings in `agentgc.task.toml` in the repo root:
 
-Put this in `agentgc.task.toml` in the repo root. The services section comes from the [full reference](docs/reference.md).
+<details>
+<summary>Example <code>agentgc.task.toml</code></summary>
 
 ```toml
 [ports]
 names = ["web", "api"]
+
 [db]
 create = "createdb {db}"
+
 [services.web]
 cmd = "npm run dev -- --port {{port.web}}"
 port = "web"
+
 [services.api]
 cmd = "cargo run -- --port {{port.api}} --db {{db}}"
 cwd = "apps/api"
 port = "api"
 ```
 
-Run these in the repo root:
+</details>
 
-```
-cd my-repo
+Then, in the repo root:
+
+```sh
 agentgc task new feat-login --yes    # worktree, ports, env file, services
 agentgc up --task feat-login         # start the services
 agentgc status --task feat-login     # pid, state and URL per service
@@ -83,11 +120,60 @@ agentgc task done feat-login --yes   # remove the task (refuses unsaved work)
 
 `task new` and `task done` print a plan first. `--yes` runs it.
 
-## Teach your agent
+<details>
+<summary>What the output looks like (shortened)</summary>
 
-An agent only uses a tool it knows about. Give it the rules once. Let `agentgc init` do it:
+```text
+$ agentgc task new feat-login --yes
+registered .agentgc/tasks/feat-login.json (state: creating)
+created worktree worktrees/feat-login on branch feat-login
+wrote worktrees/feat-login/.agentgc/task.env
+route api: api.feat-login.localhost:3101
+task feat-login is ready
 
+$ agentgc up --task feat-login
+supervisor started (pid 27980)
+  SERVICE   PID    STATE    RUNNING  RESTARTS  PORT  URL
+  api       8332   running  yes      0         3101  http://api.feat-login.localhost:3101
 ```
+
+</details>
+
+<br>
+
+<h2 align="center" id="commands">Commands</h2>
+
+<div align="center">
+
+| Command | What it does |
+|---|---|
+| `agentgc scan` | Lists junk: package caches, downloaded browser builds, agent sessions, temp files. Read-only. |
+| `agentgc worktrees` | Finds orphan worktrees and duplicate dependency folders. Read-only. |
+| `agentgc clean` | Deletes listed junk one item at a time, with a confirmation for each item. |
+| `agentgc ps` | Shows which processes belong to which task, with their RAM. Read-only. |
+| `agentgc ps --stop` | Stops idle dev servers, language servers, tests and builds. Dry run by default. |
+| `agentgc task new` / `list` / `done` | Creates, lists and removes a task environment: worktree, ports, env file, database name. |
+| `agentgc up` / `down` / `status` / `logs` / `restart` | Starts, stops, restarts and checks a task's services, and shows their logs. |
+| `agentgc run` | Queues heavy commands so only some run at once. Guards named exclusive resources. |
+| `agentgc init` | Installs the agent rules into `AGENTS.md`, `CLAUDE.md` and a Claude Code skill, after you confirm each file. |
+
+</div>
+
+<p align="center">
+  Config sections <code>[compose]</code>, <code>[routes]</code> and <code>[services]</code> add a compose file per task, route URLs and plain processes per task.<br>
+  Every flag and rule: <a href="docs/reference.md">docs/reference.md</a>
+</p>
+
+<br>
+
+<h2 align="center" id="teach-your-agent">Teach your agent</h2>
+
+<p align="center">
+  An agent only uses a tool it knows about. Give it the rules once.<br>
+  Let <code>agentgc init</code> do it:
+</p>
+
+```sh
 cd my-repo
 agentgc init                          # dry run: shows what would happen per file, writes nothing
 agentgc init --global-skill           # also the skill for all your projects
@@ -95,14 +181,19 @@ agentgc init --global-skill           # also the skill for all your projects
 
 `init` prints a plan for `AGENTS.md`, `CLAUDE.md` and `.claude/skills/agentgc/SKILL.md`, then asks `Write this? [y/N/q]` for each file. It adds only a marked block to `AGENTS.md` and `CLAUDE.md` and keeps a `.agentgc.bak` copy. It never overwrites an existing `SKILL.md`. Without a terminal, name the files with `--yes-target`. `agentgc init --print` prints the snippet and writes nothing. Restart the agent afterwards so it reads the rules.
 
-Or do it by hand:
+<details>
+<summary>Or do it by hand</summary>
 
 - **Any agent** (Codex, Claude Code, others): paste [integrations/AGENTS.md](integrations/AGENTS.md) into your `AGENTS.md` or `CLAUDE.md`.
 - **Claude Code skill:** copy [integrations/claude-code/SKILL.md](integrations/claude-code/SKILL.md) to `.claude/skills/agentgc/SKILL.md` in your project, or to `~/.claude/skills/agentgc/SKILL.md` for all projects.
 
 The rules tell the agent which commands are read-only, how to read its ports and database name from `.agentgc/task.env`, and which commands it must never run without asking you (`clean`, `ps --stop --yes`, `--force`).
 
-## Safety by design
+</details>
+
+<br>
+
+<h2 align="center" id="safety-by-design">Safety by design</h2>
 
 - Dry run is the default for `task new`, `task done` and `ps --stop`.
 - `clean` asks before each item. Only `y` deletes a `safe` item. An `ask` item needs its id typed.
@@ -113,48 +204,88 @@ The rules tell the agent which commands are read-only, how to read its ports and
 - `ps --stop` and `task done` never stop agents, databases or other processes. `clean` never kills a process.
 - agentgc opens no network port, installs no system service and does not start at boot or login.
 
-### Known limits
+> [!WARNING]
+> Windows is the tested platform. Linux and macOS code paths exist, but they have not been built or run yet.
+> On Windows, `ps --stop` needs `--force`, because agentgc has no graceful stop there.
+> The supervisor is opt-in and per task. Services start only when you run `up`.
 
-- Windows is the tested platform. Linux and macOS code paths exist, but they are not tested yet.
-- Windows has no graceful stop. `ps --stop` needs `--force` there.
-- The supervisor is opt-in and per task. Services start only when you run `up`.
+<br>
 
-## How it compares
+<h2 align="center" id="how-it-compares">How it compares</h2>
 
-- **A shell script:** deletes whatever its paths say. `clean` checks each path against guards and asks per item.
-- **Worktree helpers alone:** create checkouts. agentgc also picks free ports, writes a task env file, and refuses `task done` while work is unsaved.
-- **A queue tool alone:** limits concurrent jobs. `agentgc run` adds named exclusive resources, such as one phone or one browser profile, and Windows support.
+<div align="center">
 
-Idea credit: [heavy](https://github.com/mokevnin/heavy) by mokevnin, a counting semaphore for macOS and Linux. `agentgc run` is separate code.
+| Instead of | agentgc adds |
+|---|---|
+| A shell script | A check of each path against guards, and a question per item. |
+| Worktree helpers alone | Free ports, a task env file, and a `task done` that refuses while work is unsaved. |
+| A queue tool alone | Named exclusive resources and Windows support. |
 
-## FAQ
+</div>
 
-### Does it delete my files without asking?
+<p align="center">
+  Idea credit: <a href="https://github.com/mokevnin/heavy">heavy</a> by mokevnin, a counting semaphore for macOS and Linux.<br>
+  <code>agentgc run</code> is separate code.
+</p>
+
+<br>
+
+<h2 align="center" id="faq">FAQ</h2>
+
+<details>
+<summary><b>Does it delete my files without asking?</b></summary>
 
 No. `clean` asks before each item, and `ask` items go to the Recycle Bin. `task done` runs only with `--yes`, and it refuses when work is unsaved.
 
-### Does it run a daemon?
+</details>
+
+<details>
+<summary><b>Does it run a daemon?</b></summary>
 
 No. Nothing runs in the background unless you start it. `run` has no daemon. `up` starts one supervisor for one task, and `down` stops it.
 
-### Which agents does it work with?
+</details>
+
+<details>
+<summary><b>Which agents does it work with?</b></summary>
 
 The built-in rules cover Claude Code, Codex CLI and Gemini CLI. The process rules also match OpenCode. For other agents, write your own rules: `--rules` for `scan` and `clean`, `--proc-rules` for `ps`.
 
-### Does it need Docker?
+</details>
+
+<details>
+<summary><b>Does it need Docker?</b></summary>
 
 No. agentgc never runs docker or starts containers. The compose file is optional, and `[services]` runs plain processes.
 
-### Is it safe on Windows?
+</details>
+
+<details>
+<summary><b>Is it safe on Windows?</b></summary>
 
 It is tested on Windows, and the limits above apply. Run `clean --dry-run` first, and use `--force` for stops.
 
-## Support
+</details>
 
-If agentgc saves you time, a star on GitHub helps others find it.
+<br>
 
-Updates and notes: [Telegram channel](https://t.me/+pWGhdQdw5DZmYzYy)
+<h2 align="center" id="contributing">Contributing and security</h2>
 
-## License
+<p align="center">
+  Pull requests are welcome. Read <a href="CONTRIBUTING.md">CONTRIBUTING.md</a> first:<br>
+  changes are judged by safety, and tests use temp folders only.<br>
+  Report a safety bug through the Security tab, not a public issue. See <a href="SECURITY.md">SECURITY.md</a>.
+</p>
 
-Released under the [MIT License](LICENSE).
+<h2 align="center" id="support">Support</h2>
+
+<p align="center">
+  If agentgc saves you time, a star on GitHub helps others find it.<br>
+  Updates and notes: <a href="https://t.me/+pWGhdQdw5DZmYzYy">Telegram channel</a>
+</p>
+
+<h2 align="center" id="license">License</h2>
+
+<p align="center">
+  Released under the <a href="LICENSE">MIT License</a>.
+</p>
