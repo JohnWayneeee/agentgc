@@ -87,6 +87,14 @@
 Или соберите из исходников. agentgc написан на Rust:
 
 ```sh
+cargo install agentgc-worktree
+```
+
+Крейт называется `agentgc-worktree`. Он устанавливает команду `agentgc`.
+
+Из локального клона:
+
+```sh
 cargo install --path .
 ```
 
@@ -101,7 +109,7 @@ cargo install --path .
 ```text
 Установи agentgc на этом компьютере. Проект: https://github.com/JohnWayneeee/agentgc
 
-1. Определи мою систему. Скачай архив под неё из последнего релиза: https://github.com/JohnWayneeee/agentgc/releases/latest. Для Windows это zip, для Linux tar.gz, для macOS (Apple Silicon) tar.gz. Если архива для моей системы нет, клонируй репозиторий и выполни `cargo install --path .` в нём.
+1. Определи мою систему. Скачай архив под неё из последнего релиза: https://github.com/JohnWayneeee/agentgc/releases/latest. Для Windows это zip, для Linux tar.gz, для macOS (Apple Silicon) tar.gz. Если архива для моей системы нет, выполни `cargo install agentgc-worktree`.
 2. Сверь архив с файлом `.sha256` рядом с ним. Если сверка не сошлась, остановись и скажи мне.
 3. Положи бинарник `agentgc` в PATH. Сначала спроси меня, прежде чем менять PATH или любую другую системную настройку.
 4. Выполни `agentgc --version` и покажи мне вывод.

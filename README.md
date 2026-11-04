@@ -87,6 +87,14 @@ Download the archive for Windows, Linux or macOS (Apple Silicon) from the [lates
 Or build it from source. agentgc is a Rust project:
 
 ```sh
+cargo install agentgc-worktree
+```
+
+The crate is named `agentgc-worktree`. It installs the `agentgc` command.
+
+From a local clone:
+
+```sh
 cargo install --path .
 ```
 
@@ -101,7 +109,7 @@ Or run `cargo build --release` and use `target/release/agentgc`.
 ```text
 Install agentgc on this computer. Project: https://github.com/JohnWayneeee/agentgc
 
-1. Detect my system. Download the archive for it from the latest release at https://github.com/JohnWayneeee/agentgc/releases/latest: zip for Windows, tar.gz for Linux, tar.gz for macOS (Apple Silicon). If there is no archive for my system, clone the repo and run `cargo install --path .` in it.
+1. Detect my system. Download the archive for it from the latest release at https://github.com/JohnWayneeee/agentgc/releases/latest: zip for Windows, tar.gz for Linux, tar.gz for macOS (Apple Silicon). If there is no archive for my system, run `cargo install agentgc-worktree`.
 2. Check the archive against the `.sha256` file next to it. If the check fails, stop and tell me.
 3. Put the `agentgc` binary on PATH. Ask me first before you change PATH or any other system setting.
 4. Run `agentgc --version` and show me the output.
