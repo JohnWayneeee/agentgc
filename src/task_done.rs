@@ -645,7 +645,11 @@ fn execute(
         if o.status.success() {
             done.push(format!("git branch {flag} {}", entry.branch));
         } else {
-            outln!("  note: branch {} kept: {}", entry.branch, stderr_of(&o));
+            return Err(format!(
+                "step e (git branch {flag} {}) failed: {}. The worktree is gone; the registry entry stays so the run can resume. Merge the branch and run again, or use --force (-D)",
+                entry.branch,
+                stderr_of(&o)
+            ));
         }
     }
 

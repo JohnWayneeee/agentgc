@@ -330,3 +330,62 @@ fn resume_refuses_when_git_still_lists_worktree() {
     assert!(git_try(&repo, &["rev-parse", "--verify", "refs/heads/one"]));
     let _ = fs::remove_dir_all(&base);
 }
+
+/// `git branch -d` refuses (pushed, not merged into HEAD): done stops, keeps the registry, resumes later.
+#[test]
+fn branch_delete_refusal_is_resumable() {
+    need_git!();
+    let base = tmp("branch-refuse");
+    let repo = make_repo(&base, "");
+    let remote = base.join("remote.git");
+    fs::create_dir_all(&remote).unwrap();
+    git(&remote, &["init", "--bare"]);
+    git(&repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    new_task(&repo, "one");
+    let wt = repo.join("worktrees/one");
+    fs::write(wt.join("f.txt"), "x").unwrap();
+    git(&wt, &["add", "f.txt"]);
+    git(&wt, &["commit", "-m", "feature"]);
+    git(&wt, &["push", "origin", "one"]);
+    let (ok, t) = agentgc(&repo, &["done", "one", "--yes"]);
+    assert!(!ok && t.contains("step e"), "{t}");
+    assert!(t.contains("task done one --yes"), "{t}");
+    assert!(!wt.exists(), "worktree is gone");
+    assert!(reg(&repo, "one").exists(), "registry stays");
+    assert!(git_try(&repo, &["rev-parse", "--verify", "refs/heads/one"]));
+    // same refusal on resume
+    let (ok, t) = agentgc(&repo, &["done", "one", "--yes"]);
+    assert!(!ok && t.contains("step e"), "{t}");
+    assert!(reg(&repo, "one").exists());
+    // merge, then resume succeeds
+    git(&repo, &["merge", "one"]);
+    let (ok, t) = agentgc(&repo, &["done", "one", "--yes"]);
+    assert!(ok, "{t}");
+    assert!(!reg(&repo, "one").exists());
+    assert!(!git_try(&repo, &["rev-parse", "--verify", "refs/heads/one"]));
+    let _ = fs::remove_dir_all(&base);
+}
+
+#[test]
+fn branch_delete_refusal_resumes_with_force() {
+    need_git!();
+    let base = tmp("branch-refuse-force");
+    let repo = make_repo(&base, "");
+    let remote = base.join("remote.git");
+    fs::create_dir_all(&remote).unwrap();
+    git(&remote, &["init", "--bare"]);
+    git(&repo, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    new_task(&repo, "one");
+    let wt = repo.join("worktrees/one");
+    fs::write(wt.join("f.txt"), "x").unwrap();
+    git(&wt, &["add", "f.txt"]);
+    git(&wt, &["commit", "-m", "feature"]);
+    git(&wt, &["push", "origin", "one"]);
+    let (ok, _) = agentgc(&repo, &["done", "one", "--yes"]);
+    assert!(!ok);
+    let (ok, t) = agentgc(&repo, &["done", "one", "--yes", "--force"]);
+    assert!(ok, "{t}");
+    assert!(!reg(&repo, "one").exists());
+    assert!(!git_try(&repo, &["rev-parse", "--verify", "refs/heads/one"]));
+    let _ = fs::remove_dir_all(&base);
+}
