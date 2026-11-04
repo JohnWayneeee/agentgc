@@ -65,7 +65,7 @@ pub fn is_idle(kind: &str, cpu_percent: f32) -> bool {
     IDLE_KINDS.contains(&kind) && cpu_percent < IDLE_CPU_PERCENT
 }
 
-fn norm(p: &Path) -> String {
+pub(crate) fn norm(p: &Path) -> String {
     let s = p.to_string_lossy().replace('\\', "/").to_lowercase();
     let s = s.strip_prefix("//?/").unwrap_or(&s).to_string();
     if s.len() > 1 {
@@ -75,7 +75,7 @@ fn norm(p: &Path) -> String {
     }
 }
 
-fn path_under(path: &str, base: &str) -> bool {
+pub(crate) fn path_under(path: &str, base: &str) -> bool {
     path == base || path.strip_prefix(base).map_or(false, |r| r.starts_with('/'))
 }
 

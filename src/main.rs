@@ -1,8 +1,10 @@
 mod deps;
+mod out;
 mod ps;
 mod rules;
 mod scan;
 mod task;
+mod task_done;
 mod task_config;
 mod worktrees;
 
@@ -94,6 +96,24 @@ enum TaskCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// Remove a finished task: worktree, branch, registry entry. Dry run unless --yes.
+    Done {
+        /// Task name, as given to `task new`.
+        name: String,
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Execute. Without it nothing changes.
+        #[arg(long)]
+        yes: bool,
+        /// Stop dev-server, lsp, test and build processes inside the worktree (never agent, db, other).
+        #[arg(long)]
+        kill_procs: bool,
+        /// Discard blockers (uncommitted work, unsaved commits). Never skips the path guard.
+        #[arg(long)]
+        force: bool,
+    },
     /// List registered tasks with status (ok, missing, dirty). Read-only.
     List {
         #[arg(long)]
@@ -120,6 +140,9 @@ fn run() -> Result<(), String> {
         Cmd::Task { cmd } => match cmd {
             TaskCmd::New { name, repo, config, run_setup, yes } => {
                 task::cmd_new(&task::NewArgs { name, repo, config, run_setup, yes })
+            }
+            TaskCmd::Done { name, repo, config, yes, kill_procs, force } => {
+                task_done::cmd_done(&task_done::DoneArgs { name, repo, config, yes, kill_procs, force })
             }
             TaskCmd::List { repo, json } => task::cmd_list(repo, json),
         },

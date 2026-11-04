@@ -97,8 +97,17 @@ fn validate(c: &Config) -> Result<(), String> {
             return Err(format!("copy.files entry must be a relative path without '..': {f:?}"));
         }
     }
-    if c.worktree.base.is_empty() || c.worktree.base.starts_with('-') {
-        return Err(format!("worktree.base is not a valid branch: {:?}", c.worktree.base));
+    if bad_ref(&c.worktree.base) {
+        return Err(format!(
+            "worktree.base is not a valid branch (empty, starts with '-', or has whitespace/control characters): {:?}",
+            c.worktree.base
+        ));
+    }
+    if bad_ref(&c.worktree.branch) {
+        return Err(format!(
+            "worktree.branch is not valid (empty, starts with '-', or has whitespace/control characters): {:?}",
+            c.worktree.branch
+        ));
     }
     if c.ports.range.len() != 2 || c.ports.range[0] == 0 || c.ports.range[0] > c.ports.range[1] {
         return Err("ports.range must be [low, high] with 1 <= low <= high <= 65535".into());
@@ -119,6 +128,11 @@ fn validate(c: &Config) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// A branch or ref value we refuse: empty, starts with `-`, has whitespace or control characters.
+pub fn bad_ref(s: &str) -> bool {
+    s.is_empty() || s.starts_with('-') || s.chars().any(|c| c.is_whitespace() || c.is_control())
 }
 
 pub fn valid_env_key(k: &str) -> bool {
@@ -179,6 +193,11 @@ pub fn sanitize_repo(s: &str) -> String {
     } else {
         r
     }
+}
+
+/// Repo name for a database name: like `sanitize_repo`, with `-` turned into `_`.
+pub fn sanitize_repo_db(s: &str) -> String {
+    sanitize_repo(s).replace('-', "_")
 }
 
 fn is_var(k: &str) -> bool {
@@ -363,6 +382,12 @@ mod tests {
         assert!(parse_config("[worktree]\ndir=\"/abs\"").is_err());
         assert!(parse_config("[ports]\nrange=[5,1]").is_err());
         assert!(parse_config("[nope]\nx=1").is_err());
+        for bad in ["-x", "a b", "a\tb", "", "a\u{7f}"] {
+            assert!(parse_config(&format!("[worktree]\nbase={bad:?}")).is_err(), "base {bad:?}");
+            assert!(parse_config(&format!("[worktree]\nbranch={bad:?}")).is_err(), "branch {bad:?}");
+        }
+        assert!(parse_config("[worktree]\nbase=\"release/1.0\"\nbranch=\"task/{name}\"").is_ok());
+        assert_eq!(sanitize_repo_db("My-Repo.x"), "my_repo_x");
         assert!(parse_config("[copy]\nfiles=[\"../.env\"]").is_err());
     }
 }

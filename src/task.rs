@@ -1,3 +1,4 @@
+use crate::out::outln;
 use crate::task_config::{self as tc, Config};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -29,6 +30,20 @@ pub struct Entry {
     pub created_at: u64,
     pub setup_done: bool,
     pub drop: String,
+    /// `creating` while `new` runs (or after it failed), `ready` when done.
+    /// Old entries have no state and count as ready.
+    #[serde(default = "ready_state")]
+    pub state: String,
+}
+
+fn ready_state() -> String {
+    "ready".into()
+}
+
+impl Entry {
+    pub fn is_incomplete(&self) -> bool {
+        self.state == "creating"
+    }
 }
 
 /// Everything `new` will do, computed before anything changes.
@@ -53,7 +68,7 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-fn tasks_dir(root: &Path) -> PathBuf {
+pub(crate) fn tasks_dir(root: &Path) -> PathBuf {
     root.join(".agentgc").join("tasks")
 }
 
@@ -97,7 +112,7 @@ pub fn split_command(s: &str) -> Vec<String> {
     s.split_whitespace().map(str::to_string).collect()
 }
 
-fn valid_branch(b: &str) -> bool {
+pub(crate) fn valid_branch(b: &str) -> bool {
     !b.is_empty()
         && !b.starts_with('-')
         && !b.starts_with('/')
@@ -128,7 +143,10 @@ pub fn build_plan(
     if !valid_branch(&branch) {
         return Err(format!("branch {branch:?} is not allowed (letters, digits, . _ / - only)"));
     }
-    let db = tc::fill(&cfg.db.name, &vars)?;
+    // `{repo}` inside the db name uses `_` only: `-` is not safe in a db name.
+    let mut db_vars = vars.clone();
+    db_vars.insert("repo".into(), tc::sanitize_repo_db(root.file_name().and_then(|n| n.to_str()).unwrap_or("repo")));
+    let db = tc::fill(&cfg.db.name, &db_vars)?;
     vars.insert("db".into(), db.clone());
 
     let ports = tc::allocate_ports(
@@ -184,7 +202,7 @@ pub fn build_plan(
     })
 }
 
-fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
     Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -204,30 +222,30 @@ fn is_ignored(root: &Path, rel: &str) -> Option<bool> {
 }
 
 fn print_plan(p: &Plan, run_setup: bool, config_note: &str) {
-    println!("Plan for task {:?} ({})", p.name, config_note);
-    println!("  worktree: {}", p.wt_path.display());
-    println!("  branch:   {}  (from {})", p.branch, p.base);
-    println!("  command:  git worktree add -b {} {} {}", p.branch, p.wt_path.display(), p.base);
-    println!("  worktree dir: {}/ (task folders live here)", p.wt_dir);
-    println!("  copy files:");
+    outln!("Plan for task {:?} ({})", p.name, config_note);
+    outln!("  worktree: {}", p.wt_path.display());
+    outln!("  branch:   {}  (from {})", p.branch, p.base);
+    outln!("  command:  git worktree add -b {} {} {}", p.branch, p.wt_path.display(), p.base);
+    outln!("  worktree dir: {}/ (task folders live here)", p.wt_dir);
+    outln!("  copy files:");
     if p.copy.is_empty() {
-        println!("    (none listed)");
+        outln!("    (none listed)");
     }
     for (f, ex) in &p.copy {
-        println!("    {f}  {}", if *ex { "will copy" } else { "not found, skipped" });
+        outln!("    {f}  {}", if *ex { "will copy" } else { "not found, skipped" });
     }
     if p.ports.is_empty() {
-        println!("  ports:    (none)");
+        outln!("  ports:    (none)");
     } else {
         let s: Vec<String> = p.ports.iter().map(|(n, v)| format!("{n}={v}")).collect();
-        println!("  ports:    {}", s.join("  "));
+        outln!("  ports:    {}", s.join("  "));
     }
-    println!("  db name:  {}  (agentgc never connects to a database)", p.db);
-    println!("  env file: {}", p.wt_path.join(".agentgc").join("task.env").display());
+    outln!("  db name:  {}  (agentgc never connects to a database)", p.db);
+    outln!("  env file: {}", p.wt_path.join(".agentgc").join("task.env").display());
     for (k, v) in &p.env {
-        println!("    {k}={}", tc::mask_value(k, v));
+        outln!("    {k}={}", tc::mask_value(k, v));
     }
-    println!(
+    outln!(
         "  registry: {}",
         tasks_dir(&p.root).join(format!("{}.json", p.name)).display()
     );
@@ -239,27 +257,33 @@ fn print_plan(p: &Plan, run_setup: bool, config_note: &str) {
         cmds.push(("setup", c));
     }
     if cmds.is_empty() {
-        println!("  commands: (none)");
+        outln!("  commands: (none)");
     }
     for (kind, c) in cmds {
         if run_setup {
-            println!("  {kind}: {c}  (will run)");
+            outln!("  {kind}: {c}  (will run)");
         } else {
-            println!("  {kind}: {c}  (not run, use --run-setup)");
+            outln!("  {kind}: {c}  (not run, use --run-setup)");
         }
     }
     if !p.drop_tpl.trim().is_empty() {
-        println!("  drop: stored for the future `done`, never run by `new`");
+        outln!("  drop: stored for `task done --yes`, never run by `new`");
     }
+}
+
+pub(crate) fn branch_exists(root: &Path, branch: &str) -> bool {
+    git(root, &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn print_ignore_hints(p: &Plan) {
     let probe = format!("{}/{}/x", p.wt_dir.trim_end_matches('/'), p.name);
     if is_ignored(&p.root, &probe) == Some(false) {
-        println!("Hint: {}/ is not git-ignored; add it to .gitignore (agentgc does not edit it)", p.wt_dir);
+        outln!("Hint: {}/ is not git-ignored; add it to .gitignore (agentgc does not edit it)", p.wt_dir);
     }
     if is_ignored(&p.root, ".agentgc/tasks/x.json") == Some(false) {
-        println!("Hint: .agentgc/ should be git-ignored; add it to .gitignore (agentgc does not edit it)");
+        outln!("Hint: .agentgc/ should be git-ignored; add it to .gitignore (agentgc does not edit it)");
     }
 }
 
@@ -276,11 +300,25 @@ fn write_new(path: &Path, text: &str) -> Result<(), String> {
     f.write_all(text.as_bytes()).map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
+/// Replace a file: write a temp file in the same folder, then rename it over.
+fn write_replace(path: &Path, text: &str) -> Result<(), String> {
+    use std::io::Write;
+    let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
+    let mut f = fs::File::create(&tmp).map_err(|e| format!("cannot create {}: {e}", tmp.display()))?;
+    f.write_all(text.as_bytes()).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    f.sync_all().map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+    drop(f);
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        format!("cannot replace {}: {e}", path.display())
+    })
+}
+
 /// Run one command: whitespace split, no shell, cwd = dir. Err names the failure.
-fn run_command(cmd: &str, dir: &Path) -> Result<(), String> {
+pub(crate) fn run_command(cmd: &str, dir: &Path) -> Result<(), String> {
     let parts = split_command(cmd);
     let Some((prog, args)) = parts.split_first() else { return Ok(()) };
-    println!("  running: {cmd}");
+    outln!("  running: {cmd}");
     let st = Command::new(prog)
         .args(args)
         .current_dir(dir)
@@ -307,8 +345,34 @@ pub fn load_config(root: &Path, config: Option<&Path>) -> Result<(Config, String
     }
 }
 
-/// Execute the plan. Never overwrites a file, never deletes.
+/// Execute the plan. Never deletes. The registry entry is written first as
+/// `creating`; the one overwrite is the final rewrite as `ready`.
 pub fn execute(p: &Plan, run_setup: bool) -> Result<(), String> {
+    let mut entry = Entry {
+        name: p.name.clone(),
+        path: p.wt_path.to_string_lossy().into_owned(),
+        branch: p.branch.clone(),
+        base: p.base.clone(),
+        ports: p.ports.iter().cloned().collect(),
+        db: p.db.clone(),
+        created_at: now_secs(),
+        setup_done: false,
+        drop: p.drop_tpl.clone(),
+        state: "creating".into(),
+    };
+    let reg = tasks_dir(&p.root).join(format!("{}.json", p.name));
+    write_new(&reg, &serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?)?;
+    outln!("registered {} (state: creating)", reg.display());
+    let hint = format!("task {:?} stays registered as incomplete; run `agentgc task done {}` to clean up", p.name, p.name);
+    build(p, run_setup, &mut entry).map_err(|e| format!("{e}; {hint}"))?;
+    entry.state = "ready".into();
+    write_replace(&reg, &serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("{e}; {hint}"))?;
+    outln!("task {} is ready", p.name);
+    Ok(())
+}
+
+fn build(p: &Plan, run_setup: bool, entry: &mut Entry) -> Result<(), String> {
     let out = git(
         &p.root,
         &["worktree", "add", "-b", &p.branch, &p.wt_path.to_string_lossy(), &p.base],
@@ -319,7 +383,7 @@ pub fn execute(p: &Plan, run_setup: bool) -> Result<(), String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    println!("created worktree {} on branch {}", p.wt_path.display(), p.branch);
+    outln!("created worktree {} on branch {}", p.wt_path.display(), p.branch);
 
     for (f, ex) in &p.copy {
         if !*ex {
@@ -327,58 +391,34 @@ pub fn execute(p: &Plan, run_setup: bool) -> Result<(), String> {
         }
         let dest = p.wt_path.join(f);
         if dest.exists() {
-            println!("  skip {f}: already exists in the worktree");
+            outln!("  skip {f}: already exists in the worktree");
             continue;
         }
         if let Some(d) = dest.parent() {
             fs::create_dir_all(d).map_err(|e| format!("cannot create {}: {e}", d.display()))?;
         }
         fs::copy(p.root.join(f), &dest).map_err(|e| format!("cannot copy {f}: {e}"))?;
-        println!("  copied {f}");
+        outln!("  copied {f}");
     }
 
     let env_path = p.wt_path.join(".agentgc").join("task.env");
     write_new(&env_path, &tc::render_env(&p.env)?)?;
-    println!("wrote {}", env_path.display());
+    outln!("wrote {}", env_path.display());
 
-    let mut setup_done = false;
-    let mut failure = None;
     if run_setup {
         let mut all: Vec<&String> = Vec::new();
         if let Some(c) = &p.create {
             all.push(c);
         }
         all.extend(p.setup.iter());
-        setup_done = true;
         for c in all {
-            if let Err(e) = run_command(c, &p.wt_path) {
-                failure = Some(e);
-                setup_done = false;
-                break;
-            }
+            run_command(c, &p.wt_path)?;
         }
+        entry.setup_done = true;
     } else {
         for c in p.create.iter().chain(p.setup.iter()) {
-            println!("  not run (use --run-setup): {c}");
+            outln!("  not run (use --run-setup): {c}");
         }
-    }
-
-    let entry = Entry {
-        name: p.name.clone(),
-        path: p.wt_path.to_string_lossy().into_owned(),
-        branch: p.branch.clone(),
-        base: p.base.clone(),
-        ports: p.ports.iter().cloned().collect(),
-        db: p.db.clone(),
-        created_at: now_secs(),
-        setup_done,
-        drop: p.drop_tpl.clone(),
-    };
-    let reg = tasks_dir(&p.root).join(format!("{}.json", p.name));
-    write_new(&reg, &serde_json::to_string_pretty(&entry).map_err(|e| e.to_string())?)?;
-    println!("registered {}", reg.display());
-    if let Some(e) = failure {
-        return Err(format!("{e}; the task is registered, fix the problem and run the rest by hand"));
     }
     Ok(())
 }
@@ -396,9 +436,12 @@ pub fn cmd_new(a: &NewArgs) -> Result<(), String> {
     if plan.wt_path.exists() {
         return Err(format!("target folder already exists: {}", plan.wt_path.display()));
     }
+    if branch_exists(&root, &plan.branch) {
+        return Err(format!("branch {:?} already exists; pick another name or branch template", plan.branch));
+    }
     print_plan(&plan, a.run_setup, &note);
     if !a.yes {
-        println!("Dry run: nothing changed. Add --yes to execute.");
+        outln!("Dry run: nothing changed. Add --yes to execute.");
         print_ignore_hints(&plan);
         return Ok(());
     }
@@ -449,20 +492,24 @@ pub fn cmd_list(repo: Option<PathBuf>, json: bool) -> Result<(), String> {
     let rows = collect_rows(&root);
     if json {
         let v = serde_json::json!({ "tasks": rows });
-        println!("{}", serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?);
+        outln!("{}", serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?);
         return Ok(());
     }
     if rows.is_empty() {
-        println!("No tasks registered.");
+        outln!("No tasks registered.");
         return Ok(());
     }
     for r in &rows {
         let e = &r.entry;
+        let mut status = r.status.clone();
+        if e.is_incomplete() {
+            status.insert(0, "incomplete".into());
+        }
         let ports: Vec<String> = e.ports.iter().map(|(n, p)| format!("{n}={p}")).collect();
-        println!(
+        outln!(
             "{}  [{}]  {}d\n    path:   {}\n    branch: {}\n    ports:  {}\n    db:     {}",
             e.name,
-            r.status.join(","),
+            status.join(","),
             r.age_days,
             e.path,
             e.branch,
@@ -470,7 +517,7 @@ pub fn cmd_list(repo: Option<PathBuf>, json: bool) -> Result<(), String> {
             e.db
         );
     }
-    println!("{} tasks. Nothing was changed.", rows.len());
+    outln!("{} tasks. Nothing was changed.", rows.len());
     Ok(())
 }
 
@@ -530,11 +577,20 @@ mod tests {
     }
 
     #[test]
+    fn db_name_uses_underscore_for_repo_only() {
+        let c = cfg("[env]\nR=\"{repo}\"\n");
+        let p = build_plan(&c, "d", Path::new("/tmp/my-repo"), &HashSet::new(), &|_| true).unwrap();
+        assert_eq!(p.db, "my_repo_d");
+        assert!(tc::render_env(&p.env).unwrap().contains("R=my-repo\n"));
+    }
+
+    #[test]
     fn plan_rejects_bad_input() {
         let c = Config::default();
         let root = PathBuf::from("/tmp/r");
         assert!(build_plan(&c, "Bad Name", &root, &HashSet::new(), &|_| true).is_err());
-        let c = cfg("[worktree]\nbranch=\"--evil\"");
+        assert!(tc::parse_config("[worktree]\nbranch=\"--evil\"").is_err());
+        let c = cfg("[worktree]\nbranch=\"a;b\"");
         assert!(build_plan(&c, "ok", &root, &HashSet::new(), &|_| true).is_err());
         let c = cfg("[env]\nA=\"{nope}\"");
         assert!(build_plan(&c, "ok", &root, &HashSet::new(), &|_| true).is_err());

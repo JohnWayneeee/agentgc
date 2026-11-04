@@ -3,7 +3,7 @@
 Garbage collector for the disk junk that CLI coding agents and dev tools leave behind:
 package caches, browser downloads, agent sessions, temp files.
 
-**Status: read-only.** `scan` only measures. Nothing is deleted yet.
+**Status:** `scan`, `worktrees`, `ps` and `task list` are read-only. Only `task done --yes` deletes, and only a finished task folder (see below).
 
 ## Build
 
@@ -79,6 +79,7 @@ words are hidden. `ps` never stops, signals or changes anything; the hint line i
 ```
 agentgc task new NAME [--repo PATH] [--config FILE] [--run-setup] [--yes]
 agentgc task list [--repo PATH] [--json]
+agentgc task done NAME [--repo PATH] [--config FILE] [--yes] [--kill-procs] [--force]
 ```
 
 Parallel agents each need an isolated environment: own worktree, ports, database name, queue/cache prefix.
@@ -98,7 +99,7 @@ range = [3100, 3999]
 [db]
 name = "{repo}_{name}"     # a NAME only; agentgc never talks to a database server
 create = ""                # optional command template, for example "createdb {db}"
-drop = ""                  # stored for the future `done`, never run by `new`
+drop = ""                  # command template run by `done --yes` ({db} {name}); never run by `new`
 [env]
 TASK_ID = "{name}"
 PREFIX = "{name}_"         # queue names, cache keys, test storage paths
@@ -119,7 +120,12 @@ env file, commands) and changes nothing. `--yes` executes it:
 2. Copies the listed files that exist. Never overwrites.
 3. Picks for each port the first free one in the range: a TCP bind on 127.0.0.1 works and no other registered task holds it.
 4. Writes `<worktree>/.agentgc/task.env` (`TASK_ID`, `PREFIX`, `DB_NAME`, `PORT_<NAME>`, `[env]`, `[env.dynamic]`).
-5. Writes the registry entry `<repo>/.agentgc/tasks/<name>.json`.
+
+The registry entry `<repo>/.agentgc/tasks/<name>.json` is written FIRST with `"state": "creating"`, before step 1.
+At the end it is rewritten (temp file in the same folder, then rename) with `"state": "ready"`. A failed `new` leaves
+the entry as `creating`, so `done` can clean up. Entries without `state` count as ready. `new` refuses when the branch
+already exists. `base` and `branch` from the config must not start with `-` or hold whitespace or control characters.
+In the db name, `{repo}` uses `_` instead of `-`; elsewhere `{repo}` is unchanged.
 
 `create` and `setup.commands` run only with `--run-setup`: one by one, split by whitespace (no shell, no quotes),
 cwd = the worktree, stop at the first failure. Otherwise they are printed as "not run". The plan hides `user:pass@`
@@ -127,8 +133,53 @@ in URLs and values of keys that contain SECRET, TOKEN, PASSWORD or KEY. A hint a
 `.agentgc/` is not git-ignored; `agentgc` never edits `.gitignore`.
 
 `task list` is read-only. Per task: name, path, branch, ports, db, age in days, status `ok`, `missing` (folder gone),
-`dirty` (`git status --porcelain` prints something) or `unknown` (git failed).
-`task new` and `task list` never delete anything.
+`dirty` (`git status --porcelain` prints something), `unknown` (git failed) or `incomplete` (state `creating`).
+`task new` and `task list` never delete anything. Printing never panics on a closed stdout (`| head`).
+
+### `task done`
+
+```
+agentgc task done NAME [--repo PATH] [--config FILE] [--yes] [--kill-procs] [--force]
+```
+
+Removes a finished task. This is the only command that deletes. **Dry run is the default:** it prints the plan and
+the checks and changes nothing. `--yes` executes. When in doubt, it refuses and says why.
+
+Checks (read-only, run first):
+
+1. NAME is sanitized as in `new`. The task must be in the registry (an `incomplete` entry is allowed).
+2. **Path guard.** The registry path, resolved, must be a direct child of `<repo>/<worktree.dir>`, named like the task,
+   not a symlink, with a `.git` file (a linked worktree). Otherwise a hard error. `--force` never skips it.
+3. Uncommitted work: `git status --porcelain`, ignoring `.agentgc/`. Any entry is a BLOCKER (10 files, then "+N more").
+4. Unsaved commits: `git rev-list <branch> --not <base> --remotes`. More than 0 is a BLOCKER ("N commits are neither
+   merged into <base> nor pushed").
+5. Processes whose cwd is inside the worktree (same kinds as `ps`). All are listed. Only `dev-server`, `lsp`, `test`,
+   `build` can be stopped. `agent`, `db` and `other` are never stopped, only listed as "left running"; the folder may
+   stay locked on Windows. Processes whose cwd cannot be read are not seen.
+
+Blockers abort before any change. With `--force` a loud line "FORCE: this will discard: ..." lists what is lost.
+
+Steps with `--yes` (the first failure stops the run and the already done steps are printed):
+
+- a. With `--kill-procs`: stop the stoppable processes (never `agentgc` itself), wait up to 3 s, report each pid.
+  Without it: "not stopped (use --kill-procs)".
+- b. A non-empty `drop` template from the registry entry runs with `{db}` and `{name}` filled (whitespace split, no
+  shell, cwd = repo root). A failure aborts, unless `--force`.
+- c. Deletes `<worktree>/.agentgc/task.env`, then `.agentgc` only if it is empty.
+- d. `git worktree remove <path>`; `--force` is passed to git only when you passed `--force`. If git refuses, the
+  message is printed and `done` stops. The folder is never deleted by any other means.
+- e. `git branch -d <branch>` (`-D` with `--force`). If `-d` refuses (unmerged), a note is printed and the run continues.
+- f. Deletes the registry file.
+- g. Prints "freed about X" (size measured before step a).
+
+Never touched: anything outside the task folder, the main checkout, other tasks, remote branches. No recursive delete
+(`remove_dir_all`) exists in the command. If stdout closes during `--yes`, output goes silent but the steps still finish.
+
+## SECURITY
+
+`agentgc.task.toml` can name commands: `db.create` and `setup.commands` run with `new --run-setup`, and `db.drop`
+(stored in the registry) runs with `done --yes`. They run as you, without a shell. Review the file like a Makefile.
+Never run `new --run-setup` or `done --yes` from a repo you do not trust.
 
 ## Rules format
 
