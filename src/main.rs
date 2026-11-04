@@ -1,7 +1,9 @@
 mod deps;
+mod lock;
 mod out;
 mod ps;
 mod rules;
+mod run;
 mod scan;
 mod task;
 mod task_done;
@@ -75,6 +77,8 @@ enum Cmd {
         #[command(subcommand)]
         cmd: TaskCmd,
     },
+    /// Queue heavy commands and exclusive resources with advisory file locks. No daemon.
+    Run(run::RunArgs),
 }
 
 #[derive(Subcommand)]
@@ -137,6 +141,13 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     match cli.cmd {
+        Cmd::Run(a) => {
+            let code = run::cmd_run(&a)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
         Cmd::Task { cmd } => match cmd {
             TaskCmd::New { name, repo, config, run_setup, yes } => {
                 task::cmd_new(&task::NewArgs { name, repo, config, run_setup, yes })

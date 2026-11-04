@@ -3,7 +3,7 @@
 Garbage collector for the disk junk that CLI coding agents and dev tools leave behind:
 package caches, browser downloads, agent sessions, temp files.
 
-**Status:** `scan`, `worktrees`, `ps` and `task list` are read-only. Only `task done --yes` deletes, and only a finished task folder (see below).
+**Status:** `scan`, `worktrees`, `ps`, `task list` and `run --status` are read-only. Only `task done --yes` deletes, and only a finished task folder (see below). `run` writes only its own slot and info files.
 
 ## Build
 
@@ -176,6 +176,53 @@ Steps with `--yes` (the first failure stops the run and the already done steps a
 
 Never touched: anything outside the task folder, the main checkout, other tasks, remote branches. No recursive delete
 (`remove_dir_all`) exists in the command. If stdout closes during `--yes`, output goes silent but the steps still finish.
+
+## Queue for heavy commands (`run`)
+
+```
+agentgc run [--resource NAME]... [--slots N] [--pool NAME] [--dir DIR] [--timeout SECONDS]
+            [--on-timeout fail|run] [--log FILE] [--no-skip-ci] -- COMMAND [ARGS...]
+agentgc run --status [--dir DIR] [--pool NAME] [--json]
+```
+
+```
+agentgc run -- pnpm test                                    # at most a quarter of the cores run at once
+agentgc run --resource phone --slots 1 -- npm run e2e       # one run at a time on a shared device
+agentgc run --status                                        # who holds which slot
+```
+
+Many agents on one machine start heavy commands (tests, builds) at the same time. `run` makes them take turns.
+It also guards an exclusive resource (a phone, a simulator, one browser profile).
+
+- **No daemon.** A slot is a file `<dir>/<pool>/<resource>.<i>.lock` with an advisory exclusive lock
+  (`LockFileEx` on Windows, `flock` on Linux and macOS). The OS releases the lock when the holder dies, even after a crash or kill.
+- **Not fair.** Waiters poll every 200 ms. Whoever finds a free slot first gets it. There is no order and no priority.
+- **Defaults.** Dir `<temp dir>/agentgc-run`, pool `default`, resource `default`, slots = a quarter of the logical cores
+  (at least 1). Env fallbacks: `AGENTGC_DIR`, `AGENTGC_POOL`, `AGENTGC_SLOTS`, `AGENTGC_TIMEOUT`, `AGENTGC_ON_TIMEOUT`,
+  `AGENTGC_LOG`. Names: lowercase letters, digits, `-`, `_`.
+- **Several resources.** Taken in sorted name order (no deadlock), each with `--slots` slots. All are held while the
+  command runs. A named exclusive resource uses `--slots 1`.
+- **Waiting.** When no slot is free, `run` prints once to stderr who holds each slot (pid, how long, command, from the
+  holder's `.info` file) and keeps waiting. A free slot prints nothing. When it gets the slot: `got <resource> slot i after X s`.
+- **Holder info.** `<resource>.<i>.info` (pid, command, cwd, start) is for display only. The lock is the truth. A stale
+  info file of a dead holder blocks nothing. A holder removes only its own `.info`. `run` never deletes a lock or info
+  file of another process.
+- **Timeout.** `--timeout` stops the waiting. `--on-timeout fail` (default): "gave up waiting", exit 75.
+  `--on-timeout run`: runs the command anyway, without slots.
+- **The command.** argv after `--`, no shell, stdio and cwd inherited. Exit code of `agentgc` = exit code of the command;
+  127 when the program cannot start; 75 on timeout. On Windows, bare names also find `.cmd` and `.bat` (`npm`, `pnpm`).
+- **Nesting.** The child gets `AGENTGC_HELD=<pool>:<resource>[,<resource>...]` (several pools joined with `;`).
+  A nested `agentgc run` whose resources are all in that list runs at once. Resources not in the list are still queued.
+- **CI.** With env `CI` set, `run` runs the command at once, without a queue. `--no-skip-ci` turns this off.
+- **Log.** `--log FILE` appends one JSON line per queued run: `start`, `pool`, `resources`, `command`, `cwd`, `slots`,
+  `waited_ms`, `ran_ms`, `timed_out`, `exit`. Runs that skipped the queue are not logged.
+- **Status.** `--status` lists every pool and resource under the dir with each slot held or free (a non-blocking lock
+  attempt, released at once) and the holder's info. `--json` for machines. Read-only: it never stops or kills anything.
+
+`run` queues CPU-heavy work and exclusive devices. Ports and database names are separate: `task` handles them.
+
+Idea credit: [heavy](https://github.com/mokevnin/heavy), a counting semaphore for macOS and Linux. `agentgc run` is
+separate code; it adds Windows and named resources.
 
 ## SECURITY
 
