@@ -83,6 +83,15 @@ agentgc task done feat-login --yes   # удалить задачу (отказ �
 
 Команды `task new` и `task done` сначала печатают план. `--yes` выполняет его.
 
+## Научите своего агента
+
+Агент пользуется только тем инструментом, о котором знает. Дайте ему правила один раз:
+
+- **Любой агент** (Codex, Claude Code и другие): вставьте [integrations/AGENTS.md](integrations/AGENTS.md) в свой `AGENTS.md` или `CLAUDE.md`.
+- **Навык для Claude Code:** скопируйте [integrations/claude-code/SKILL.md](integrations/claude-code/SKILL.md) в `.claude/skills/agentgc/SKILL.md` проекта или в `~/.claude/skills/agentgc/SKILL.md` для всех проектов.
+
+Правила объясняют агенту, какие команды только читают, как взять порты и имя базы из `.agentgc/task.env` и какие команды нельзя запускать без вашего разрешения (`clean`, `ps --stop --yes`, `--force`). Файлы правил написаны на английском, чтобы их понимали все агенты.
+
 ## Безопасность по умолчанию
 
 - Режим проверки (dry run) включен по умолчанию для `task new`, `task done` и `ps --stop`.

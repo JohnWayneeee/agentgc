@@ -83,6 +83,15 @@ agentgc task done feat-login --yes   # remove the task (refuses unsaved work)
 
 `task new` and `task done` print a plan first. `--yes` runs it.
 
+## Teach your agent
+
+An agent only uses a tool it knows about. Give it the rules once:
+
+- **Any agent** (Codex, Claude Code, others): paste [integrations/AGENTS.md](integrations/AGENTS.md) into your `AGENTS.md` or `CLAUDE.md`.
+- **Claude Code skill:** copy [integrations/claude-code/SKILL.md](integrations/claude-code/SKILL.md) to `.claude/skills/agentgc/SKILL.md` in your project, or to `~/.claude/skills/agentgc/SKILL.md` for all projects.
+
+The rules tell the agent which commands are read-only, how to read its ports and database name from `.agentgc/task.env`, and which commands it must never run without asking you (`clean`, `ps --stop --yes`, `--force`).
+
 ## Safety by design
 
 - Dry run is the default for `task new`, `task done` and `ps --stop`.
