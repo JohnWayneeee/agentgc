@@ -1130,6 +1130,47 @@ mod tests {
         let _ = fs::remove_dir_all(&target);
     }
 
+    #[cfg(windows)]
+    fn try_junction(target: &Path, link: &Path) -> bool {
+        std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn junctions_are_removed_not_followed() {
+        let d = tmp("junction");
+        let target = tmp("junction-target");
+        fs::write(target.join("keep"), b"x").unwrap();
+        fs::create_dir_all(d.join("c")).unwrap();
+        if !try_junction(&target, &d.join("c").join("l")) {
+            eprintln!("skipped: cannot create a junction here");
+            let _ = fs::remove_dir_all(&d);
+            let _ = fs::remove_dir_all(&target);
+            return;
+        }
+        remove_tree(&d.join("c")).unwrap();
+        assert!(target.join("keep").exists());
+        assert!(!d.join("c").exists());
+
+        // Direct call on the junction path.
+        let j = d.join("j");
+        if try_junction(&target, &j) {
+            remove_tree(&j).unwrap();
+            assert!(!j.exists());
+            assert!(target.join("keep").exists());
+            // Safety net: never remove_dir_all over a live junction.
+            let _ = fs::remove_dir(&j);
+        }
+        let _ = fs::remove_dir_all(&d);
+        let _ = fs::remove_dir_all(&target);
+    }
+
     #[test]
     fn real_remover_removes_a_temp_tree() {
         let d = tmp("real");
